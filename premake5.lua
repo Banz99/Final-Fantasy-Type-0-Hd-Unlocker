@@ -1,7 +1,7 @@
-workspace "FFT0HD Resolution Unlocker"
+workspace "FFT0HD Unlocker"
 	platforms { "Win64" }
 
-project "FFT0HD Resolution Unlocker"
+project "FFT0HD Unlocker"
 	kind "SharedLib"
 	targetextension ".asi"
 	language "C++"
