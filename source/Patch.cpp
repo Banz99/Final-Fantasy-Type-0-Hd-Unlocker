@@ -117,6 +117,9 @@ void OnInitializeHook()
 
 			/*[ref] points to the absolute address in the PSP elf on which similar patches were applied*/
 
+			auto baseaddress = trampoline->RawSpace(sizeof(HMODULE));
+			Patch<HMODULE>(baseaddress, GetModuleHandle(nullptr));
+
 			//Actual value used for the frame limiter (also likely to [ref: 0x0008614C] since there are no other 0.0333333 floats referenced in the code)
 			auto frameratelimit = pattern("88 88 08 3D 89 88 08 3D 35 FA 0E 3D 29 5C 0F 3D").count(1);
 			Patch<float>(frameratelimit.get_first<void>(0x4), 1.0f / framerate);
@@ -158,11 +161,17 @@ void OnInitializeHook()
 			Patch<byte>(frint6.get_first<void>(0xC), 255.0f / ((framerate / 30.0f) * 19.0f));
 			frint6 = pattern("0E 8B C3 69 C0 00 00 00 0D 81 C7 00 00 00 FB 03").count(1);
 			Patch<byte>(frint6.get_first<void>(0x8), 255.0f / ((framerate / 30.0f) * 19.0f));
+			//Dialog boxex on the left side (not strictly necessary since they are also audio synced, but nice to have)
+			auto frint7 = pattern("00 00 00 48 8B 5C 24 30 6B C0 1E 83 C0 1D 89 46").count(1);
+			Patch<byte>(frint1.get_first<void>(0xA), (byte)framerate);
+			frint7 = pattern("C0 1E 83 C0 1D 89 46 0C 48 8B 5C 24 38 48 8B 74").count(1);
+			Patch<byte>(frint1.get_first<void>(0x1), (byte)framerate);
 
 			//[ref: 0x000A9AF4]
 			auto charactersanimationspeed = pattern("80 A3 B6 09 00 00 F7 C7 83 D8 05 00 00 00 00 80 3F");
 			Patch<float>(charactersanimationspeed.get_first<void>(0xD), framerate != 60.0f ? 30.0f / framerate : 29.9f / framerate); //The lip sync function that the game uses for real time cutscenes REALLY doesn't like 0.5f as a value here.
 
+			//Relock the game back to 30fps when prerendered cutscenes are playing
 			auto movielimit = pattern("02 32 C9 48 8B 05 7E F9 60 00 88 88 D0 00 00 00").count(1);
 			size_t size;
 			if (!ks_asm_fnc(ks,"mov[rax + 0D0h], cl; cmp cl, 0; je A; mov dword ptr [rip + 0x410e3a], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x410e3a], 0x3C888889; B: jmp 0x10000000",0,&encode,&size,&count))
@@ -356,6 +365,62 @@ void OnInitializeHook()
 				ks_free_fnc(encode);
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+
+			//Moogle dialog box
+			match = pattern("39 83 5C 01 00 00 40 0F B6 FF B9 01 00 00 00 0F").count(1);
+			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", framerate / 30.0f, "cvtss2si eax, xmm11; cmp [rbx+15Ch], eax", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x6)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
+			}
+
+			//In game timer shown in Akademia (it's a frame counter)
+			match = pattern("33 FF 45 33 C0 F7 25 ED 7B 2A 00 8B FA B8 89 88").count(1);
+			if (!ModifyXMMRegisterJump("mul dword ptr [rip + 0x2a7bed]; cvtsi2ss xmm11, edx;", "mulss", "xmm11", "xmm10", "edx", 15.0f / framerate, "cvtss2si edx, xmm11;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 2, match.get_first<void>(0xB + 0x2a7bed)); //Third byte of a mul is the address, gets computed to dword_1406BEE88
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
+			}
+			//In game timer when loaded from save file (for consistency between framerates, otherwise the division above while timed correctly, would have been offsetted, basically (![X]*speed!+[Y*2]*speed)/speed so that whatever increased speed is there, it's cancelled out (this is the between !! part))
+			match = pattern("0F 85 87 00 00 00 B9 BA 00 00 00 0F 1F 44 00 00 0F 28 00 4D 8D 89 80 00 00 00 48 8D 80 80 00 00 00 41 0F 29 41 80").count(1); //this pattern sucks
+			if (!ModifyXMMRegisterJump("movaps xmmword ptr [r9-80h], xmm0; mov r15, r9; sub r15, 0x78; sub r15, qword ptr [rip + 0x11223344]; cmp r15d, 0x6BEE88; jnz A; cvtsi2ss xmm11, dword ptr [r9-78h];", "mulss", "xmm11", "xmm10", "r15d", framerate / 15.0f, "cvtss2si r15d, xmm11; mov dword ptr [r9-78h], r15d; A: nop", &encode, &size)) //The game uses a weird way of loading the save file, it copies multiple values via xmmword even though they are dwords, check if dword_1406BEE88 had been written and modify it
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 15, baseaddress); //patched in place of 0x11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x26)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x21), space, PATCH_JUMP);
+			}
+			//Game timer when saved to the sysfile (offset 0x8 for TYPE0SYS in SYSTEMDATA (which is a memmove starting from 0x1406BEE80))
+			match = pattern("BC 97 09 00 48 8B 0D 65 0D 70 00 48 83 C1 08 E8").count(1);
+			if (!ModifyXMMRegisterJump("mov rcx, qword ptr [rip + 0x700d65]; mov r9, r15; sub r9, qword ptr [rip + 0x11223344]; cmp r9d, 0x6BEE80; jnz A; cvtsi2ss xmm11, dword ptr [rdi + 0x8];","mulss","xmm11","xmm10","r9d", 15.0f/framerate, "cvtss2si r9d, xmm11; and r9d, 0xFFFFFFFE; mov dword ptr [rdi + 0x8], r9d; A: nop", &encode, &size)) //The AND is just a failsafe, maybe not strictly necessary, but since the frame counter gets incremented by 2 every frame, having an odd number of them may cause problems.
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 3, match.get_first<void>(0xB + 0x700d65)); //Replicate jumped of instruction
+				WriteOffsetValue(space + 13, baseaddress); //patched in place of 0x11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
+			//Game timer when copied into a buffer for writing it into the various save data slots
+			match = pattern("7C 5E 4C 00 89 87 64 07 00 00 0F B6 05 67 BC 4C").count(1);
+			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", 15.0f / framerate, "cvtss2si eax, xmm11; and eax, 0xFFFFFFFE; mov [rdi+764h], eax", &encode, &size)) //The AND is just a failsafe, maybe not strictly necessary, but since the frame counter gets incremented by 2 every frame, having an odd number of them may cause problems.
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
 		}
 		else {
