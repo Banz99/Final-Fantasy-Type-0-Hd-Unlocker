@@ -51,6 +51,24 @@ int ModifyXMMRegisterJump(const char* previousinstructions, const char* xmminstr
 	return ks_asm_fnc(ks, producedassembly, 0, encode, size, &count);
 }
 
+//This defines a spline that interpolates the original "FF F0 C0 B0 A0 80 70 60" sequence of bytes used when defining the pulsating transparency (in a 0.0 -> 1.0 range)
+uint8_t TransparencySplineInterpolation(float x) {
+	if (x < 0.14)
+		return round(-3785.14 * x * x * x - 27.75 * x + 255);
+	if (x < 0.29)
+		return round(7606.68 * x * x * x - 4882.21 * x * x + 669.71 * x + 221.79);
+	if (x < 0.43)
+		return round(-4346.59 * x * x * x + 5363.45 * x * x - 2257.63 * x + 500.58);
+	if (x < 0.57)
+		return round(-1196.32 * x * x * x + 1313.1 * x * x - 521.76 * x + 252.6);
+	if (x < 0.71)
+		return round(3643.86 * x * x * x - 6984.34 * x * x + 4219.64 * x - 650.52);
+	if (x < 0.86)
+		return round(-2403.12 * x * x * x + 5973.47 * x * x - 5035.95 * x + 1553.19);
+	else return round(480.62 * x * x * x - 1441.87 * x * x + 1320.06 * x - 262.82);
+}
+
+
 void OnInitializeHook()
 {
 
@@ -174,7 +192,7 @@ void OnInitializeHook()
 			//Relock the game back to 30fps when prerendered cutscenes are playing
 			auto movielimit = pattern("02 32 C9 48 8B 05 7E F9 60 00 88 88 D0 00 00 00").count(1);
 			size_t size;
-			if (!ks_asm_fnc(ks,"mov[rax + 0D0h], cl; cmp cl, 0; je A; mov dword ptr [rip + 0x410e3a], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x410e3a], 0x3C888889; B: jmp 0x10000000",0,&encode,&size,&count))
+			if (!ks_asm_fnc(ks,"mov [rax + 0D0h], cl; cmp cl, 0; je A; mov dword ptr [rip + 0x410e3a], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x410e3a], 0x3C888889; B: jmp 0x10000000",0,&encode,&size,&count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -186,19 +204,22 @@ void OnInitializeHook()
 				InjectHook(movielimit.get_first<void>(0xA), space, PATCH_JUMP);
 			}
 
-			//Characters walking speeds (also in cutscenes) [ref: 0x00083CF8]
-			auto match = pattern("24 20 0F 2F C1 F3 0F 10 71 38 76 5E E8 EF F9 FE").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm6, dword ptr[rcx + 38h]", "mulss", "xmm6", "xmm7", "edx", 30.0f / framerate, "", &encode, &size)) {
+			//Characters walking speeds (with check for cutscenes) [ref: 0x00083CF8]
+			auto match = pattern("24 0F 28 CE F3 0F 59 4C 24 20 F3 0F 11 43 1C F3").count(1);
+			if (!ModifyXMMRegisterJump("cmp dword ptr[rip + 48h], 0; mulss xmm1, dword ptr [rsp + 0x20]; jnz A;", "mulss", "xmm1", "xmm7", "edx", 30.0f / framerate, "mulss xmm6, xmm7; A: nop", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
+				WriteOffsetValue(space + 2, match.get_first<void>(0xA + 0x3B521D)); //Third byte of a mov instruction is the address, gets computed so that it points to dword_140775E60 (movement related non gameplay cutscenes).
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
 
 			//Controlled character turning speed (a bit broken above 90 fps) [ref: 0x00006734 to 0x00006744]
 			match = pattern("F3 0F 59 49 40 F3 0F 59 CA F3 0F 59 51 34 F3 0F 59 0D 1F C4 3A 00").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm1, dword ptr [rcx+40h]; movss xmm2, dword ptr [rcx+34h]", "mulss", "xmm1", "xmm7", "edx", 15.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("movss xmm1, dword ptr [rcx+40h]; movss xmm2, dword ptr [rcx+34h]", "mulss", "xmm1", "xmm7", "edx", 15.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -208,7 +229,8 @@ void OnInitializeHook()
 
 			//First cutscene slow-motion walk speed [ref: 0x00006998]
 			match = pattern("20 5B C3 F3 0F 10 41 04 F3 0F 58 05 69 BE 3A 00").count(1);
-			if (!ModifyXMMRegisterJump("", "addss", "xmm0", "xmm7", "edx", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("", "addss", "xmm0", "xmm7", "edx", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -218,7 +240,8 @@ void OnInitializeHook()
 
 			//Camera distance in cutscenes [ref: 0x00155CB0]
 			match = pattern("00 44 0F 29 44 24 70 F3 44 0F 10 05 DC BF 29 00").count(1);
-			if (!LoadXMMRegisterJump("", "xmm8", "edx", 30.0f / framerate, "", &encode, &size)) {
+			if (!LoadXMMRegisterJump("", "xmm8", "edx", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -228,7 +251,8 @@ void OnInitializeHook()
 
 			//Cutscene timings [ref: 0x00127D90]
 			match = pattern("2F C8 76 04 C6 41 2C 01 F3 0F 5C 0D 93 34 22 00").count(1);
-			if (!ModifyXMMRegisterJump("", "subss", "xmm1", "xmm7", "edx", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("", "subss", "xmm1", "xmm7", "edx", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -238,7 +262,8 @@ void OnInitializeHook()
 
 			//Part of the HUD [ref: 0x002491E4]
 			match = pattern("0F 5B C0 F3 0F 5E C8 F3 0F 58 CA 41 0F 2F CF").count(1);
-			if (!ModifyXMMRegisterJump("divss xmm1, xmm0", "mulss", "xmm1", "xmm7", "eax", 30.0f / framerate, "addss xmm1, xmm2", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("divss xmm1, xmm0", "mulss", "xmm1", "xmm7", "eax", 30.0f / framerate, "addss xmm1, xmm2", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -248,7 +273,8 @@ void OnInitializeHook()
 
 			//[ref: 0x001F9924 and 0x001F9934]
 			match = pattern("05 57 A6 24 00 F3 41 0F 59 C8 D1 E8 41 84 C7 74").count(1);
-			if (!ModifyXMMRegisterJump("mulss xmm1, xmm8", "mulss", "xmm1", "xmm6", "edx", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("mulss xmm1, xmm8", "mulss", "xmm1", "xmm6", "edx", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -258,7 +284,8 @@ void OnInitializeHook()
 
 			//[ref: 0x002A13A8]
 			match = pattern("05 93 57 2C 00 F3 41 0F 10 84 06 B8 00 00 00 0F").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm0, dword ptr[r14 + rax + 0B8h]", "mulss", "xmm0", "xmm7", "edx", framerate / 30.0f, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("movss xmm0, dword ptr[r14 + rax + 0B8h]", "mulss", "xmm0", "xmm7", "edx", framerate / 30.0f, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -285,7 +312,8 @@ void OnInitializeHook()
 			}
 			*/
 
-			if (!ModifyXMMRegisterJump("cmp dword ptr[rip + 48h], 0; jnz A; mov edx, 0x40A00000; movd xmm7, edx; comiss xmm0, xmm7; jb A; ", "addss", "xmm0", "xmm7", "edx", DecreaseFloatPrecision(30.0f / framerate, 23), "jmp B; A: mov edx, 0x3F800000; movd xmm7, edx; addss xmm0, xmm7; B: nop", & encode, & size)) { //The game expects 1.0 increments when deciding what to do next. Unfortunately adding up float values introduces errors that make the strict comparison not match. So round up to either 0.5 or 0.25.
+			if (!ModifyXMMRegisterJump("cmp dword ptr[rip + 48h], 0; jnz A; mov edx, 0x40A00000; movd xmm7, edx; comiss xmm0, xmm7; jb A; ", "addss", "xmm0", "xmm7", "edx", DecreaseFloatPrecision(30.0f / framerate, 23), "jmp B; A: mov edx, 0x3F800000; movd xmm7, edx; addss xmm0, xmm7; B: nop", & encode, & size)) //The game expects 1.0 increments when deciding what to do next. Unfortunately adding up float values introduces errors that make the strict comparison not match. So round up to either 0.5 or 0.25.
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -297,7 +325,8 @@ void OnInitializeHook()
 
 			//Unknown (likely Gameplay fixes #2 due to proximity) [ref: 0x0013D86C]
 			match = pattern("00 00 00 F3 0F 10 04 88 F3 0F 5C 05 78 DD 20 00").count(1);
-			if (!ModifyXMMRegisterJump("", "subss", "xmm0", "xmm7", "edx", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("", "subss", "xmm0", "xmm7", "edx", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -307,7 +336,8 @@ void OnInitializeHook()
 
 			//Fix controller camera speed (orbital) for controller
 			match = pattern("C7 F3 0F 59 C7 0F 28 F8 F3 0F 59 3D AC 2D 32 00").count(1);
-			if (!ModifyXMMRegisterJump("mulss xmm7, dword ptr [rip + 0x322dac]", "mulss", "xmm7", "xmm9", "edx", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("mulss xmm7, dword ptr [rip + 0x322dac]", "mulss", "xmm7", "xmm9", "edx", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -317,7 +347,8 @@ void OnInitializeHook()
 			}
 			//Same as above but for mouse
 			match = pattern("F3 0F 59 3D 9E 2D 32 00 80 3D 0A AA 36 00").count(1);
-			if (!ModifyXMMRegisterJump("mulss xmm7, dword ptr [rip + 0x322d9e]", "mulss", "xmm7", "xmm9", "edx", log(framerate)/log(30.0f), "", &encode, &size)) { //Mouse movement doesn't scale linearly, this seems like a good compromise based on a few framerates samples in the three camera speed options available
+			if (!ModifyXMMRegisterJump("mulss xmm7, dword ptr [rip + 0x322d9e]", "mulss", "xmm7", "xmm9", "edx", log(framerate)/log(30.0f), "", &encode, &size)) //Mouse movement doesn't scale linearly, this seems like a good compromise based on a few framerates samples in the three camera speed options available
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -327,7 +358,8 @@ void OnInitializeHook()
 			}
 			//Fix controller camera speed (when transitioning to lock-on)
 			match = pattern("FF F3 44 0F 10 1D 42 F6 31 00 F3 41 0F 59 C3 44").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm11, dword ptr [rip + 0x31f642]", "mulss", "xmm11", "xmm5", "edx", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("movss xmm11, dword ptr [rip + 0x31f642]", "mulss", "xmm11", "xmm5", "edx", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -339,7 +371,8 @@ void OnInitializeHook()
 
 			//Some other parts of the HUD (i.e heat effect in the main menu) [ref: 0x002E4E50]
 			match = pattern("48 8B CB 75 0D 0F 28 D6 F3 0F 59 90 F8 01 00 00").count(1);
-			if (!ModifyXMMRegisterJump("", "mulss", "xmm2", "xmm7", "r10d", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("", "mulss", "xmm2", "xmm7", "r10d", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -349,7 +382,8 @@ void OnInitializeHook()
 
 			//[ref: 0x002A1838]
 			match = pattern("E8 3B C3 FF FF F3 41 0F 58 84 3E B8 00 00 00 F3").count(1);
-			if (!ModifyXMMRegisterJump("addss xmm0, dword ptr [r14+rdi+0B8h]", "mulss", "xmm0", "xmm7", "r10d", 30.0f / framerate, "", &encode, &size)) {
+			if (!ModifyXMMRegisterJump("addss xmm0, dword ptr [r14+rdi+0B8h]", "mulss", "xmm0", "xmm7", "r10d", 30.0f / framerate, "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -359,7 +393,8 @@ void OnInitializeHook()
 
 			//Blue wavey effect
 			match = pattern("0F 29 B3 28 FF FF FF F3 44 0F 10 2D 55 E5 17 00").count(1);
-			if (!LoadXMMRegisterJump("", "xmm13", "edx", DecreaseFloatPrecision(4.0f * (30.0f / framerate), 8), "", &encode, &size)) {
+			if (!LoadXMMRegisterJump("", "xmm13", "edx", DecreaseFloatPrecision(4.0f * (30.0f / framerate), 8), "", &encode, &size))
+			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
@@ -421,6 +456,38 @@ void OnInitializeHook()
 				ks_free_fnc(encode);
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
+
+			//Icons on the minimap that blink
+			match = pattern("00 89 45 A0 81 E1 0F 00 00 80 7D 07 FF C9 83 C9 F0 FF C1 48 63 C1 48 8D 55 88 48 8B CB 44 8B 74 85 00 48").count(1);
+			uint32_t transparency_frames_count = 16.0f * framerate / 30.0f;
+			transparency_frames_count &= 0xFFFFFFFE; //This has to be an even number
+			auto transparency_frames = trampoline->RawSpace(transparency_frames_count);
+			for (int i = 0; i < transparency_frames_count / 2; i++)
+			{
+				transparency_frames[i] = (std::byte)TransparencySplineInterpolation((float)i / (transparency_frames_count / 2 - 1));
+				transparency_frames[transparency_frames_count - 1 - i] = transparency_frames[i];
+			}
+			if (!ks_asm_fnc(ks, "mov eax, ecx; mov r14d, 0x11223344; xor edx, edx; div r14d; lea rax, [rip + 0x55667788]; add rax, rdx; xor ecx, ecx; mov cl, byte ptr [rax]; mov r14d, ecx; lea rdx, [rbp - 0x78]; mov rcx, rbx; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				Patch<uint32_t>(space + 4, transparency_frames_count);  //Replaces 11223344
+				WriteOffsetValue(space + 16, transparency_frames); //Replaces 55667788
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x22)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
+
+			//Circle growing (TODO: Understand how it works and patch it instead of making it pretend it's running @30fps)
+			match = pattern("83 F8 01 41 B0 01 B8 89 88 88 88 75 0C 45 8D 4B");
+			if (!ModifyXMMRegisterJump("mov eax, 0x88888889; cvtsi2ss xmm11, r11d;", "mulss", "xmm11", "xmm10", "r11d", 30.0f / framerate, "cvtss2si r11d, xmm11; ", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x6), space, PATCH_JUMP);
 			}
 		}
 		else {
