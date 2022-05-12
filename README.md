@@ -11,12 +11,12 @@ _Warning_: Setting a resolution unsupported by your primary monitor will close t
 
 ## Framerate cap
 
-###  THIS FEATURE IS HIGLY EXPERIMENTAL AND AS SUCH EXPECT SOME PROBLEMS.
+###  THIS FEATURE IS HIGHLY EXPERIMENTAL AND AS SUCH EXPECT SOME PROBLEMS.
 
 The framerate patching process uses a runtime assembler (Keystone) and manual memory patches to replicate all the edits that were included in the amazing [PSP cheat code made by LunaMoo](https://forums.ppsspp.org/showthread.php?tid=4799&pid=105556#pid105556) for the original title wherever the game code was a good match between the two versions.
 On top of that, a few additions were added wherever some other stuff had been found by me (mostly UI elements).
 
-**The framerate cap can be set to whatever value in the 30-120 fps value you like, however it's highly recommended that you stick to 60/90/120 as those produce the best results being multiples of the original.**
+**The framerate cap can be set to whatever value in the 30-120 fps range you like, however it's highly recommended that you stick to 60/90/120 as those produce the best results being multiples of the original.**
 
 A list of issues that you may encounter is already available [here](http://forums.ppsspp.org/showthread.php?tid=4799&pid=105945#pid105945) (they become more noticeable the further you go from 30 fps).
 
@@ -24,6 +24,8 @@ _Important_: The game low framerate compensation (frame skipping) doesn't work a
 
 The code is largely based on the various SilentPatches released by CookiePLMonster.
 
+
+Since this is a work in progress, what you see in the release section are what I consider important milestones, but you can get the latest nightly build [here](https://github.com/Banz99/Final-Fantasy-Type-0-Hd-Unlocker/issues/2).
 
 ## Credits
 * [CookiePLMonster](https://github.com/CookiePLMonster)
