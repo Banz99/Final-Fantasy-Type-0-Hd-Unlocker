@@ -68,6 +68,14 @@ uint8_t TransparencySplineInterpolation(float x) {
 	else return round(480.62 * x * x * x - 1441.87 * x * x + 1320.06 * x - 262.82);
 }
 
+//Honestly, I have no idea why Square Enix thought that the blinking yellow arrow should have different values when in battle, but here we are (a spline for this doesn't produce a great result)
+uint8_t TransparencyLinearInterpolation(float x) {
+	if (x < 0.52)
+		return round(432.69 * x + 25);
+	if (x < 0.68)
+		return 250;
+	else return round(-703.125 * x + 728.125);
+}
 
 void OnInitializeHook()
 {
@@ -206,12 +214,13 @@ void OnInitializeHook()
 
 			//Characters walking speeds (with check for cutscenes) [ref: 0x00083CF8]
 			auto match = pattern("24 0F 28 CE F3 0F 59 4C 24 20 F3 0F 11 43 1C F3").count(1);
-			if (!ModifyXMMRegisterJump("cmp dword ptr[rip + 48h], 0; mulss xmm1, dword ptr [rsp + 0x20]; jnz A;", "mulss", "xmm1", "xmm7", "edx", 30.0f / framerate, "mulss xmm6, xmm7; A: nop", &encode, &size))
+			if (!ModifyXMMRegisterJump("mulss xmm1, dword ptr [rsp + 0x20]; cmp dword ptr [rip + 0x11223344], 0; jz A; cmp dword ptr [rip + 0x22334455], 0; jz B; A:nop;", "mulss", "xmm1", "xmm7", "edx", 30.0f / framerate, "mulss xmm6, xmm7; B: nop", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 2, match.get_first<void>(0xA + 0x3B521D)); //Third byte of a mov instruction is the address, gets computed so that it points to dword_140775E60 (movement related non gameplay cutscenes).
+				WriteOffsetValue(space + 8, match.get_first<void>(0xA + 0x2982F9)); //Replaces 11223344, gets computed so that it points to dword_140658F3C (1 when it's in a cutscene, 0 otherwise).
+				WriteOffsetValue(space + 17, match.get_first<void>(0xA + 0x39A5FD)); //Replaces 22334455, gets computed so that it points to dword_14075B240 (I have no clue what this value is supposed to represent or be used for, all I could observe is that it was 0 whenever the cutscene shown was NOT supposed to have the movement speed changed, so i just decided to blindly use it)
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
@@ -293,7 +302,7 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 
-			//Gameplay fixes #1 (i.e guards falling into the ground below when dropping from the ship at the beginning of the game) Note: the check for dword_140658F70 determines if it's in a cutscene (and always use 1.0 in that case) and the < 5.0 check is for avoiding softlocks when enemies are supposed to spawn later [ref: 0x0013D75C]
+			//Gameplay fixes #1 (i.e guards falling into the ground below when dropping from the ship at the beginning of the game) Note: the check for dword_140658F3C determines if it's in a cutscene (and always use 1.0 in that case) and the < 5.0 check is for avoiding softlocks when enemies are supposed to spawn later [ref: 0x0013D75C]
 			match = pattern("8B 43 08 F3 0F 10 04 88 F3 0F 58 05 3C DE 20 00").count(1);
 
 			/* Failed attempt at fixing the imprecise float accumulation described below, rounding introduced more problems than those it fixed
@@ -317,7 +326,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 2, match.get_first<void>(0x7 + 0x2e6fc4)); //Third byte of a mov instruction is the address, gets computed so that it points to dword_14065833C
+				WriteOffsetValue(space + 2, match.get_first<void>(0x7 + 0x2e6fc4)); //Third byte of a mov instruction is the address, gets computed so that it points to dword_140658F3C
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
@@ -341,7 +350,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 4, match.get_first<void>(0x10 + 0x322dac)); //Fifth byte of a movss x86 is the address, gets computed so that it points to dword_7FF78856141C
+				WriteOffsetValue(space + 4, match.get_first<void>(0x10 + 0x322dac)); //Fifth byte of a movss x86 is the address, gets computed so that it points to dword_14061141C
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
@@ -352,7 +361,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 4, match.get_first<void>(0x8 + 0x322d9e)); //Fifth byte of a movss x86 is the address, gets computed so that it points to dword_7FF788561418
+				WriteOffsetValue(space + 4, match.get_first<void>(0x8 + 0x322d9e)); //Fifth byte of a movss x86 is the address, gets computed so that it points to dword_140611418
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
@@ -363,7 +372,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 5, match.get_first<void>(0xA + 0x31f642)); //Sixth byte of a movss x64 is the address, gets computed so that it points to dword_7FF78856141C
+				WriteOffsetValue(space + 5, match.get_first<void>(0xA + 0x31f642)); //Sixth byte of a movss x64 is the address, gets computed so that it points to dword_14061141C
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
 			}
@@ -478,9 +487,36 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x22)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
+			//Handle edge case that works differently for some reason (26 frames of animation instead of 16)
+			match = pattern("0D D3 97 1A 00 45 69 C9 00 00 00 19 41 81 C9 FF").count(1);
+			transparency_frames_count = 26.0f * framerate / 30.0f;
+			transparency_frames = trampoline->RawSpace(transparency_frames_count);
+			for (int i = 0; i < transparency_frames_count; i++)
+			{
+				transparency_frames[i] = (std::byte)TransparencyLinearInterpolation((float)i / (transparency_frames_count - 1));
+			}
+			if (!ks_asm_fnc(ks, "mov eax, dword ptr [rip + 0x22334455]; mov r9d, 0x11223344; xor edx, edx; div r9d; lea rax, [rip + 0x55667788]; add rax, rdx; mov dl, byte ptr [rax]; mov r9d, edx; shl r9d, 0x18; mov edx,DWORD PTR [rsp+0x120]; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				WriteOffsetValue(space + 2, match.get_first<void>(0xC + 0x2663EC)); //replaces 22334455, so that it points to dword_14063CD00
+				Patch<uint32_t>(space + 8, transparency_frames_count);  //Replaces 11223344
+				WriteOffsetValue(space + 20, transparency_frames); //Replaces 55667788
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
+				match = pattern("6C 94 1A 00 45 69 C0 00 00 00 19 41 81 C8 FF FF").count(1); //Also handle the else branch
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 2, match.get_first<void>(0xB + 0x266085)); //replaces 22334455, so that it points to dword_14063CD00
+				Patch<uint32_t>(space + 8, transparency_frames_count);  //Replaces 11223344
+				WriteOffsetValue(space + 20, transparency_frames); //Replaces 55667788
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
 
-			//Circle growing (TODO: Understand how it works and patch it instead of making it pretend it's running @30fps)
-			match = pattern("83 F8 01 41 B0 01 B8 89 88 88 88 75 0C 45 8D 4B");
+			//Color circles pulsating (TODO: Understand how they work and patch them instead of making them pretend they're running @30fps)
+			match = pattern("83 F8 01 41 B0 01 B8 89 88 88 88 75 0C 45 8D 4B").count(1);
 			if (!ModifyXMMRegisterJump("mov eax, 0x88888889; cvtsi2ss xmm11, r11d;", "mulss", "xmm11", "xmm10", "r11d", 30.0f / framerate, "cvtss2si r11d, xmm11; ", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
@@ -489,6 +525,20 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x6), space, PATCH_JUMP);
 			}
+
+			//Fix animated water texture speed
+			match = pattern("F3 44 0F 59 15 4F DA 1B 00 0F 28 D1 85 C9 0F 84").count(1);
+			if (!ModifyXMMRegisterJump("", "mulss", "xmm10", "xmm2", "r11d", (0.033333331f * 30.0f) / framerate, "", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
+			}
+
+
+
 		}
 		else {
 			MessageBox(
