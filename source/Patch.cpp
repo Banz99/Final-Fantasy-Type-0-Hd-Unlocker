@@ -247,7 +247,7 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
 
-			//Camera distance in cutscenes [ref: 0x00155CB0]
+			//Camera distance in the first cutscene [ref: 0x00155CB0]
 			match = pattern("00 44 0F 29 44 24 70 F3 44 0F 10 05 DC BF 29 00").count(1);
 			if (!LoadXMMRegisterJump("", "xmm8", "edx", 30.0f / framerate, "", &encode, &size))
 			{
@@ -256,6 +256,29 @@ void OnInitializeHook()
 				ks_free_fnc(encode);
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+
+			//Fix camera movement in the panning cutscenes (i.e new area introductions in Akademia)
+			match = pattern("0F 85 E9 01 00 00 8B 05 94 51 37 00 FF C0 2B C8").count(1);
+			if (!ModifyXMMRegisterJump("mov eax, dword ptr [rip + 0x375194]; cvtsi2ss xmm11, ecx;", "mulss", "xmm11", "xmm10", "ecx", framerate / 30.0f, "cvtss2si ecx, xmm11;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 2, match.get_first<void>(0xC + 0x375194)); //dword_140658FA8
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x6), space, PATCH_JUMP);
+			}
+			//Fix camera rotation in the panning cutscenes (i.e new area introductions in Akademia)
+			match = pattern("00 8B 05 7D 4D 37 00 FF C0 2B C8 89 05 73 4D 37").count(1);
+			if (!ModifyXMMRegisterJump("mov eax, dword ptr [rip + 0x374d7d]; cvtsi2ss xmm11, ecx;", "mulss", "xmm11", "xmm10", "ecx", framerate / 30.0f, "cvtss2si ecx, xmm11;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 2, match.get_first<void>(0x7 + 0x374d7d)); //dword_140658FAC
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x7)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
 			}
 
 			//Cutscene timings [ref: 0x00127D90]
@@ -293,7 +316,7 @@ void OnInitializeHook()
 
 			//[ref: 0x002A13A8]
 			match = pattern("05 93 57 2C 00 F3 41 0F 10 84 06 B8 00 00 00 0F").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm0, dword ptr[r14 + rax + 0B8h]", "mulss", "xmm0", "xmm7", "edx", framerate / 30.0f, "", &encode, &size))
+			if (!ModifyXMMRegisterJump("movss xmm0, dword ptr [r14 + rax + 0B8h]", "mulss", "xmm0", "xmm7", "edx", framerate / 30.0f, "", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -330,7 +353,6 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
-
 
 			//Unknown (likely Gameplay fixes #2 due to proximity) [ref: 0x0013D86C]
 			match = pattern("00 00 00 F3 0F 10 04 88 F3 0F 5C 05 78 DD 20 00").count(1);
@@ -537,6 +559,16 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
 
+			//Fix info panels on the left side of the screen disappearing too quickly (i.e Character used Magic, Obtained Phantoma etc.)
+			match = pattern("4C 8D 34 90 8B 55 80 85 D2 41 C6 46 1A 00 41 0F").count(1);
+			if (!ModifyXMMRegisterJump("mov edx, dword ptr [rbp - 0x80]; cvtsi2ss xmm11, edx;", "mulss", "xmm11", "xmm10", "edx", framerate / 30.0f, "cvtss2si edx, xmm11; test edx, edx;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
 
 
 		}
