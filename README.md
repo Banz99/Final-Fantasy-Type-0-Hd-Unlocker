@@ -9,6 +9,8 @@ It works by replacing the standard 1080p with your own custom width and height s
 
 _Warning_: Setting a resolution unsupported by your primary monitor will close the game immediately on startup.
 
+**BIG WARNING: The game's antialiasing option allows the game to supersample, effectively rendering internally at a resolution that is bigger than the game's final output to your screen to improve image quality. While this was fine @1080p, if you set your resolution to an higher value keep in mind that the high setting will use 2.25 times the number of pixels, and the ultra one will be 4 times! (Example: from 2160p(4k), it would be 3240p and 4320p(8k) respectively). If your monitor supports the resolution you chose but the game is still crashing on startup, try lowering this option.**
+
 ## Framerate cap
 
 ###  THIS FEATURE IS HIGHLY EXPERIMENTAL AND AS SUCH EXPECT SOME PROBLEMS.
