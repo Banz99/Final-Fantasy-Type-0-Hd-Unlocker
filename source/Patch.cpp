@@ -38,7 +38,7 @@ float DecreaseFloatPrecision(float input, uint8_t nbits) {
 int LoadXMMRegisterJump(const char* previousinstructions, const char* xmmbase, const char* immediateregister, float value, const char* followinginstructions, unsigned char** encode, size_t* size)
 {
 	size_t count;
-	char producedassembly[500];
+	char producedassembly[2500];
 	sprintf_s(producedassembly, "%s; mov %s, 0x%x; movd %s, %s; %s; jmp 0x1000000", previousinstructions, immediateregister, *(uint32_t*)&value, xmmbase, immediateregister, followinginstructions);
 	return ks_asm_fnc(ks, producedassembly, 0, encode, size, &count);
 }
@@ -46,7 +46,7 @@ int LoadXMMRegisterJump(const char* previousinstructions, const char* xmmbase, c
 int ModifyXMMRegisterJump(const char* previousinstructions, const char* xmminstruction, const char* xmmbase, const char* xmmtemp, const char* immediateregister, float value, const char* followinginstructions, unsigned char** encode, size_t* size)
 {
 	size_t count;
-	char producedassembly[500];
+	char producedassembly[2500];
 	sprintf_s(producedassembly, "%s; mov %s, 0x%x; movd %s, %s; %s %s, %s; %s; jmp 0x1000000", previousinstructions, immediateregister, *(uint32_t*)&value, xmmtemp, immediateregister, xmminstruction, xmmbase, xmmtemp, followinginstructions);
 	return ks_asm_fnc(ks, producedassembly, 0, encode, size, &count);
 }
@@ -568,6 +568,77 @@ void OnInitializeHook()
 				ks_free_fnc(encode);
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
+
+			//Projectile speed general fix (This is the holy grail of fixes, but it's also one of the worst manual x86 code ever written.) Note: the first parameter passed to the function in which this is injected (sub_140287C20) gets copied to rdi. Rdi + 0x54, 58 and 5C contains the coordinate offset for the next frame, which I'd need to adjust according to the framerate, however since the functions that call this one are many and different between each other, the compiler decided to sometimes have temporary registers that holds those values (3 of the registers in the xmm6-12 range) and sometimes reload them from memory. This code should handle every possible combination of those, but it's really ugly. The only other solution would be to manually patch each function before the call, but that would require a lot of redirections for doing basically the same things.
+			match = pattern("7A B0 01 4C 8D 9C 24 C0 00 00 00 49 8B 5B 38 49 8B 73 40 49 8B 7B 48 41 0F 28 73 F0 41 0F 28 7B").count(1);
+			if (!LoadXMMRegisterJump("movaps xmm6, xmmword ptr [r11-10h]; movaps xmm7, xmmword ptr [r11-20h]; movaps xmm8, xmmword ptr [r11-30h];", "xmm2", "r9d", 30.0f / framerate, "comiss xmm6, dword ptr [rdi+54h]; je A; comiss xmm6, dword ptr [rdi+58h]; je A; comiss xmm6, dword ptr [rdi+5Ch]; jne B; A: mulss xmm6, xmm2; B: comiss xmm7, dword ptr [rdi+54h]; je C; comiss xmm7, dword ptr [rdi+58h]; je C; comiss xmm7, dword ptr [rdi+5Ch]; jne D; C: mulss xmm7, xmm2; D: comiss xmm8, dword ptr [rdi+54h]; je E; comiss xmm8, dword ptr [rdi+58h]; je E; comiss xmm8, dword ptr [rdi+5Ch]; jne F; E: mulss xmm8, xmm2; F: comiss xmm9, dword ptr [rdi+54h]; je G; comiss xmm9, dword ptr [rdi+58h]; je G; comiss xmm9, dword ptr [rdi+5Ch]; jne H; G: mulss xmm9, xmm2; H: comiss xmm10, dword ptr [rdi+54h]; je I; comiss xmm10, dword ptr [rdi+58h]; je I; comiss xmm10, dword ptr [rdi+5Ch]; jne J; I: mulss xmm10, xmm2; J: comiss xmm11, dword ptr [rdi+54h]; je K; comiss xmm11, dword ptr [rdi+58h]; je K; comiss xmm11, dword ptr [rdi+5Ch]; jne L; K: mulss xmm11, xmm2; L: comiss xmm12, dword ptr [rdi+54h]; je M; comiss xmm12, dword ptr [rdi+58h]; je M; comiss xmm12, dword ptr [rdi+5Ch]; jne N; M: mulss xmm12, xmm2; N: movss xmm3, dword ptr [rdi+54h]; mulss xmm3, xmm2; movss dword ptr [rdi+54h], xmm3; movss xmm3, dword ptr [rdi+58h]; mulss xmm3, xmm2; movss dword ptr [rdi+58h], xmm3; movss xmm3, dword ptr [rdi+5Ch]; mulss xmm3, xmm2; movss dword ptr [rdi+5Ch], xmm3; mov rdi, [r11+48h];", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x26)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x13), space, PATCH_JUMP);
+			}
+
+
+			/*Specific characters moveset fixes*/
+
+			//Queen's Divine Judgement ability gauge's cost (per frame)
+			match = pattern("D0 74 0F F7 DA 45 33 C0 48 8B CF E8 D0 60 00 00").count(1);
+			if (!ModifyXMMRegisterJump("xor r8d, r8d; cvtsi2ss xmm11, edx;", "mulss", "xmm11", "xmm10", "edx", 30.0f / framerate, "cvtss2si edx, xmm11; neg edx", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
+			}
+			//Queen's Divine Judgement rotation speed
+			match = pattern("F3 0F 10 05 2C 65 2D 00 F3 0F 58 87 B8 00 00 00").count(1);
+			if (!ModifyXMMRegisterJump("", "mulss", "xmm1", "xmm10", "r11d", 30.0f / framerate, "mulss xmm0, xmm10; addss xmm0, dword ptr [rdi+0B8h];", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
+			}
+
+			//Nine's Jump
+			auto NinesJumpFloatAccumulator = trampoline->RawSpace(sizeof(float));
+			match = pattern("00 00 66 FF 87 86 00 00 00 48 8B 8D E0 00 00 00").count(1);
+			if (!ModifyXMMRegisterJump("movss xmm11, dword ptr [rip + 0x11223344];", "addss", "xmm11", "xmm10", "r11d", 30.0f / framerate, "mov r11d, 0x3F800000; movd xmm10, r11d; comiss xmm11, xmm10; jb A; subss xmm11, xmm10; inc word ptr [rdi+86h]; A: movss dword ptr [rip + 0x22334455], xmm11;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 5, NinesJumpFloatAccumulator); //Replaces 11223344
+				WriteOffsetValue(space + 59, NinesJumpFloatAccumulator); //Replaces 22334455
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
+			}
+
+			//Ace's normal cards travel distance (number of frames, relevant since we reduced the speed per frame)
+			match = pattern("41 BF 01 00 00 00 0F B7 83 88 00 00 00 44 0F 28").count(1);
+			if (!ModifyXMMRegisterJump("movzx eax, word ptr [rbx+88h]; cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm9", "eax", framerate / 30.0f, "cvtss2si eax, xmm11;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xD)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x6), space, PATCH_JUMP);
+			}
+
+			//Ace's charged card attack timings
+			match = pattern("E9 A6 05 00 00 0F B7 87 88 00 00 00 66 39 87 86").count(1);
+			if (!ModifyXMMRegisterJump("movzx eax, word ptr [rdi+88h]; cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm9", "eax", framerate / 30.0f, "cvtss2si eax, xmm11;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 
 
