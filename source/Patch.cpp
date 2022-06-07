@@ -28,10 +28,10 @@ HMODULE hDLLKeystone;
 float DecreaseFloatPrecision(float input, uint8_t nbits) {
 	if (nbits == 0)
 		return input;
-	uint32_t mask = 0xFFFFFFFF - ((uint32_t)pow(2, nbits) - 1);
-	uint32_t temp = *(uint32_t*)&input; //Necessary evil bithack that decreases the float's precision. (Only 60 and 120 fps will be 100% correct, every other value will be lower, resulting in a slight speedup or slowdown depending on context)
+	uint32_t mask = 0xFFFFFFFF - (static_cast<uint32_t>(pow(2, nbits) - 1));
+	uint32_t temp = *reinterpret_cast<uint32_t*>(&input); //Necessary evil bithack that decreases the float's precision. (Only 60 and 120 fps will be 100% correct, every other value will be lower, resulting in a slight speedup or slowdown depending on context)
 	temp = temp & mask;
-	return *(float*)&temp;
+	return *reinterpret_cast<float*>(&temp);
 }
 
 
@@ -39,7 +39,7 @@ int LoadXMMRegisterJump(const char* previousinstructions, const char* xmmbase, c
 {
 	size_t count;
 	char producedassembly[2500];
-	sprintf_s(producedassembly, "%s; mov %s, 0x%x; movd %s, %s; %s; jmp 0x1000000", previousinstructions, immediateregister, *(uint32_t*)&value, xmmbase, immediateregister, followinginstructions);
+	sprintf_s(producedassembly, "%s; mov %s, 0x%x; movd %s, %s; %s; jmp 0x1000000", previousinstructions, immediateregister, *reinterpret_cast<uint32_t*>(&value), xmmbase, immediateregister, followinginstructions);
 	return ks_asm_fnc(ks, producedassembly, 0, encode, size, &count);
 }
 
@@ -47,7 +47,7 @@ int ModifyXMMRegisterJump(const char* previousinstructions, const char* xmminstr
 {
 	size_t count;
 	char producedassembly[2500];
-	sprintf_s(producedassembly, "%s; mov %s, 0x%x; movd %s, %s; %s %s, %s; %s; jmp 0x1000000", previousinstructions, immediateregister, *(uint32_t*)&value, xmmtemp, immediateregister, xmminstruction, xmmbase, xmmtemp, followinginstructions);
+	sprintf_s(producedassembly, "%s; mov %s, 0x%x; movd %s, %s; %s %s, %s; %s; jmp 0x1000000", previousinstructions, immediateregister, *reinterpret_cast<uint32_t*>(&value), xmmtemp, immediateregister, xmminstruction, xmmbase, xmmtemp, followinginstructions);
 	return ks_asm_fnc(ks, producedassembly, 0, encode, size, &count);
 }
 
@@ -150,19 +150,18 @@ void OnInitializeHook()
 			auto frameratelimit = pattern("88 88 08 3D 89 88 08 3D 35 FA 0E 3D 29 5C 0F 3D").count(1);
 			Patch<float>(frameratelimit.get_first<void>(0x4), 1.0f / framerate);
 			DWORD dwProtect;
-			VirtualProtect((void*)frameratelimit.get_first<void>(0x4), sizeof(float), PAGE_EXECUTE_READWRITE, &dwProtect); //This variable needs to be writable by the movie function below
+			VirtualProtect(frameratelimit.get_first<void>(0x4), sizeof(float), PAGE_EXECUTE_READWRITE, &dwProtect); //This variable needs to be writable by the movie function below
 
 			//Framerate here is used as an integer
 			//[ref: 0x0004F084]
 			auto frint1 = pattern("88 42 30 B0 01 C3 04 1E 88 42 30 32 C0 C3 CC").count(1);
-			Patch<byte>(frint1.get_first<void>(0x7), (byte)framerate);
+			Patch<uint8_t>(frint1.get_first<void>(0x7), framerate);
 			//[ref: 0x00179AEC]
 			auto frint2 = pattern("05 7F 4A 3E 00 83 F8 1E 7C 23 C7 05 70 4A 3E").count(1);
-			Patch<byte>(frint2.get_first<void>(0x7), (byte)framerate);
-			/*//[ref: 0x00208D84] Kinda dangerous, crashes the game if actually applied
+			Patch<uint8_t>(frint2.get_first<void>(0x7), framerate);
+			//[ref: 0x00208D84] Maybe fixes some timers?
 			auto frint3 = pattern("51 01 00 00 81 BB 70 6E 00 00 84 03 00 00 0F 8E").count(1);
-			Patch<uint32_t>(frint1.get_first<void>(0xA), (uint32_t)framerate*30);
-			*/
+			Patch<uint32_t>(frint3.get_first<void>(0xA), framerate * 30);
 			//Party stats pop up time (when not in battle or near a relic terminal)
 			auto frint4 = pattern("FF FF 32 C0 EB 70 C7 05 AF BC 37 00 96 00 00 00").count(1);
 			Patch<uint32_t>(frint4.get_first<void>(0xC), (framerate / 30.0f) * 150.0f);
@@ -174,24 +173,19 @@ void OnInitializeHook()
 			Patch<uint32_t>(frint4.get_first<void>(0xC), (framerate / 30.0f) * 150.0f);
 			//"Reraise" and other status effects on top of the characters name
 			auto frint5 = pattern("C0 75 43 41 FF 40 08 41 83 78 08 14 0F 8C B1 00").count(1);
-			Patch<byte>(frint5.get_first<void>(0xB), (framerate / 30.0f) * 20.0f);
+			Patch<uint8_t>(frint5.get_first<void>(0xB), (framerate / 30.0f) * 20.0f);
 			frint5 = pattern("D1 73 43 41 FF 40 08 41 83 78 08 14 7C 66 83 F8").count(1);;
-			Patch<byte>(frint5.get_first<void>(0xB), (framerate / 30.0f) * 20.0f);
+			Patch<uint8_t>(frint5.get_first<void>(0xB), (framerate / 30.0f) * 20.0f);
 			//Flashing examine button
 			auto frint6 = pattern("DB 78 4E 8B 4D CB FF C9 75 47 2B FA 83 FB 14 7C").count(1);
-			Patch<byte>(frint6.get_first<void>(0xE), (framerate / 30.0f) * 20.0f);
+			Patch<uint8_t>(frint6.get_first<void>(0xE), (framerate / 30.0f) * 20.0f);
 			frint6 = pattern("00 69 C9 00 00 00 0D 2B C1 EB 24 83 FB 0A 7D 11").count(1);
-			Patch<byte>(frint6.get_first<void>(0x6), 255.0f / ((framerate / 30.0f) * 19.0f)); //0x0D000000 is a uint32_t but the only relevant part are the highest 8 bits (0D) since it's used to calculate the alpha channel.
-			Patch<byte>(frint6.get_first<void>(0xD), (framerate / 30.0f) * 10.0f);
+			Patch<uint8_t>(frint6.get_first<void>(0x6), 255.0f / ((framerate / 30.0f) * 19.0f)); //0x0D000000 is a uint32_t but the only relevant part are the highest 8 bits (0D) since it's used to calculate the alpha channel.
+			Patch<uint8_t>(frint6.get_first<void>(0xD), (framerate / 30.0f) * 10.0f);
 			frint6 = pattern("8B CB B8 00 00 00 FF 69 C9 00 00 00 0D 2B C1 EB").count(1);
-			Patch<byte>(frint6.get_first<void>(0xC), 255.0f / ((framerate / 30.0f) * 19.0f));
+			Patch<uint8_t>(frint6.get_first<void>(0xC), 255.0f / ((framerate / 30.0f) * 19.0f));
 			frint6 = pattern("0E 8B C3 69 C0 00 00 00 0D 81 C7 00 00 00 FB 03").count(1);
-			Patch<byte>(frint6.get_first<void>(0x8), 255.0f / ((framerate / 30.0f) * 19.0f));
-			//Dialog boxex on the left side (not strictly necessary since they are also audio synced, but nice to have)
-			auto frint7 = pattern("00 00 00 48 8B 5C 24 30 6B C0 1E 83 C0 1D 89 46").count(1);
-			Patch<byte>(frint1.get_first<void>(0xA), (byte)framerate);
-			frint7 = pattern("C0 1E 83 C0 1D 89 46 0C 48 8B 5C 24 38 48 8B 74").count(1);
-			Patch<byte>(frint1.get_first<void>(0x1), (byte)framerate);
+			Patch<uint8_t>(frint6.get_first<void>(0x8), 255.0f / ((framerate / 30.0f) * 19.0f));
 
 			//[ref: 0x000A9AF4]
 			auto charactersanimationspeed = pattern("80 A3 B6 09 00 00 F7 C7 83 D8 05 00 00 00 00 80 3F");
@@ -214,12 +208,12 @@ void OnInitializeHook()
 
 			//Characters walking speeds (with check for cutscenes) [ref: 0x00083CF8]
 			auto match = pattern("24 0F 28 CE F3 0F 59 4C 24 20 F3 0F 11 43 1C F3").count(1);
-			if (!ModifyXMMRegisterJump("mulss xmm1, dword ptr [rsp + 0x20]; cmp dword ptr [rip + 0x11223344], 0; jz A; cmp dword ptr [rip + 0x22334455], 0; jz B; A:nop;", "mulss", "xmm1", "xmm7", "edx", 30.0f / framerate, "mulss xmm6, xmm7; B: nop", &encode, &size))
+			if (!ModifyXMMRegisterJump("mulss xmm1, dword ptr [rsp + 0x20]; cmp dword ptr [rip + 0x11223344], 1; jnz A; cmp dword ptr [rip + 0x22334455], 0; jz B; A:nop;", "mulss", "xmm1", "xmm7", "edx", 30.0f / framerate, "mulss xmm6, xmm7; B: nop", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 8, match.get_first<void>(0xA + 0x2982F9)); //Replaces 11223344, gets computed so that it points to dword_140658F3C (1 when it's in a cutscene, 0 otherwise).
+				WriteOffsetValue(space + 8, match.get_first<void>(0xA + 0x29832D)); //Replaces 11223344, gets computed so that it points to dword_140658F70 (1 when it's in a cutscene, 0 otherwise).
 				WriteOffsetValue(space + 17, match.get_first<void>(0xA + 0x39A5FD)); //Replaces 22334455, gets computed so that it points to dword_14075B240 (I have no clue what this value is supposed to represent or be used for, all I could observe is that it was 0 whenever the cutscene shown was NOT supposed to have the movement speed changed, so i just decided to blindly use it)
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
@@ -444,6 +438,17 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
 
+			//Delay before next dialog when characters speak via the COM (i.e Kurasame at the beginning, with subtitles shown on the left side) Note: if you liked the previous speeded up behaviour you can select the fast dialog speed inside the options.
+			match = pattern("0F 4F C1 89 45 0C 48 8B 5C 24 58 48 8B 6C 24 68").count(1);
+			if (!ModifyXMMRegisterJump("cmovg eax, ecx; cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", framerate / 30.0f, "cvtss2si eax, xmm11; mov [rbp+0Ch], eax", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x6)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
+			}
+
 			//In game timer shown in Akademia (it's a frame counter)
 			match = pattern("33 FF 45 33 C0 F7 25 ED 7B 2A 00 8B FA B8 89 88").count(1);
 			if (!ModifyXMMRegisterJump("mul dword ptr [rip + 0x2a7bed]; cvtsi2ss xmm11, edx;", "mulss", "xmm11", "xmm10", "edx", 15.0f / framerate, "cvtss2si edx, xmm11;", &encode, &size))
@@ -496,7 +501,7 @@ void OnInitializeHook()
 			auto transparency_frames = trampoline->RawSpace(transparency_frames_count);
 			for (int i = 0; i < transparency_frames_count / 2; i++)
 			{
-				transparency_frames[i] = (std::byte)TransparencySplineInterpolation((float)i / (transparency_frames_count / 2 - 1));
+				transparency_frames[i] = static_cast<std::byte>(TransparencySplineInterpolation(static_cast<float>(i) / (transparency_frames_count / 2 - 1)));
 				transparency_frames[transparency_frames_count - 1 - i] = transparency_frames[i];
 			}
 			if (!ks_asm_fnc(ks, "mov eax, ecx; mov r14d, 0x11223344; xor edx, edx; div r14d; lea rax, [rip + 0x55667788]; add rax, rdx; xor ecx, ecx; mov cl, byte ptr [rax]; mov r14d, ecx; lea rdx, [rbp - 0x78]; mov rcx, rbx; jmp 0x10000000", 0, &encode, &size, &count))
@@ -515,7 +520,7 @@ void OnInitializeHook()
 			transparency_frames = trampoline->RawSpace(transparency_frames_count);
 			for (int i = 0; i < transparency_frames_count; i++)
 			{
-				transparency_frames[i] = (std::byte)TransparencyLinearInterpolation((float)i / (transparency_frames_count - 1));
+				transparency_frames[i] = static_cast<std::byte>(TransparencyLinearInterpolation(static_cast<float>(i) / (transparency_frames_count - 1)));
 			}
 			if (!ks_asm_fnc(ks, "mov eax, dword ptr [rip + 0x22334455]; mov r9d, 0x11223344; xor edx, edx; div r9d; lea rax, [rip + 0x55667788]; add rax, rdx; mov dl, byte ptr [rax]; mov r9d, edx; shl r9d, 0x18; mov edx,DWORD PTR [rsp+0x120]; jmp 0x10000000", 0, &encode, &size, &count))
 			{
@@ -581,6 +586,33 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x13), space, PATCH_JUMP);
 			}
 
+			//General frame counter based actions (bullets range (Ace's cards, rocket launcher guy), charged attacks etc.)
+			pattern("0F B7 ? 88 00 00 00").for_each_result([framerate, trampoline] (auto found) // movzx X, word ptr [Y + 88h] : X = general purpose 32 bit register, Y = general purpose 64 bit register
+			{
+				unsigned char* encode;
+				char patternbuilt[30];
+				size_t size = 0;
+				sprintf_s(patternbuilt, "66 39 %02X 86 00 00 00", *found.get<uint8_t>(2)); // cmp word ptr [Y + 0x86], X* : X* = low 16 bits of X (same actual register, different addressing mode)
+				auto followingcomparison = pattern(reinterpret_cast<uintptr_t>(found.get<void>()), reinterpret_cast<uintptr_t>(found.get<void>(100)), patternbuilt).count_hint(1); //Read ahead for the next 100 bytes, in case some instructions were inserted between them
+				if (followingcomparison.size() >= 1)
+				{
+					if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm9", "eax", framerate / 30.0f, "cvtss2si eax, xmm11;", &encode, &size))
+					{
+						auto space = trampoline->RawSpace(size + 7);
+						memcpy(space, found.get<void>(), 7); //Copy the same movzx instruction as is
+						space += 7;
+						memcpy(space, encode, size);
+						ks_free_fnc(encode);
+						uint8_t reg = (*found.get<uint8_t>(2) >> 3) & 0x7; //Evil x86 bit hackery to get the general purpose register out of the opcode (what would be X in the instructions above)
+						Patch<uint8_t>(space + 4, 0xD8 | reg); //Replaces eax in cvtsi2ss xmm11, eax
+						Patch<uint8_t>(space + 5, 0xB8 | reg); //Replaces eax in mov eax, framerate/30.0f (added by ModifyXMMRegisterJump)
+						Patch<uint8_t>(space + 14, 0xC8 | reg); //Replaces eax in movd xmm9, eax (added by ModifyXMMRegisterJump)
+						Patch<uint8_t>(space + 24, 0xC3 | (reg << 3)); //Replaces eax in cvtss2si eax, xmm11;
+						WriteOffsetValue(space + size - 4, found.get<void>(0x7)); //Fill the final jump with the correct address
+						InjectHook(found.get<void>(), space - 7, PATCH_JUMP);
+					}
+				}
+			});
 
 			/*Specific characters moveset fixes*/
 
@@ -605,42 +637,27 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
 
-			//Nine's Jump
-			auto NinesJumpFloatAccumulator = trampoline->RawSpace(sizeof(float));
-			match = pattern("00 00 66 FF 87 86 00 00 00 48 8B 8D E0 00 00 00").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm11, dword ptr [rip + 0x11223344];", "addss", "xmm11", "xmm10", "r11d", 30.0f / framerate, "mov r11d, 0x3F800000; movd xmm10, r11d; comiss xmm11, xmm10; jb A; subss xmm11, xmm10; inc word ptr [rdi+86h]; A: movss dword ptr [rip + 0x22334455], xmm11;", &encode, &size))
+			//Nine's jump travel distance
+			match = pattern("87 FC 00 00 00 F3 0F 58 53 08 F3 0F 58 4B 04 F3 0F 58 03 F3 0F 11 03 F3").count(1);
+			if (!LoadXMMRegisterJump("", "xmm10", "r11d", 30.0f / framerate, "mulss xmm2, xmm10; mulss xmm1, xmm10; mulss xmm0, xmm10; addss xmm2, dword ptr [rbx+8]; addss xmm1, dword ptr [rbx+4]; addss xmm0, dword ptr [rbx]", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 5, NinesJumpFloatAccumulator); //Replaces 11223344
-				WriteOffsetValue(space + 59, NinesJumpFloatAccumulator); //Replaces 22334455
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
-			}
-
-			//Ace's normal cards travel distance (number of frames, relevant since we reduced the speed per frame)
-			match = pattern("41 BF 01 00 00 00 0F B7 83 88 00 00 00 44 0F 28").count(1);
-			if (!ModifyXMMRegisterJump("movzx eax, word ptr [rbx+88h]; cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm9", "eax", framerate / 30.0f, "cvtss2si eax, xmm11;", &encode, &size))
-			{
-				space = trampoline->RawSpace(size);
-				memcpy(space, encode, size);
-				ks_free_fnc(encode);
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0xD)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x6), space, PATCH_JUMP);
-			}
-
-			//Ace's charged card attack timings
-			match = pattern("E9 A6 05 00 00 0F B7 87 88 00 00 00 66 39 87 86").count(1);
-			if (!ModifyXMMRegisterJump("movzx eax, word ptr [rdi+88h]; cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm9", "eax", framerate / 30.0f, "cvtss2si eax, xmm11;", &encode, &size))
-			{
-				space = trampoline->RawSpace(size);
-				memcpy(space, encode, size);
-				ks_free_fnc(encode);
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x13)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 
+			//Rocket Launcher guy projectile speed (instead of being set every time the function is called, it's only done once, so it needs to be reset for the next cycle)
+			match = pattern("8F 20 00 66 FF 87 86 00 00 00 48 8B 8D 10 01 00").count(1);
+			if (!LoadXMMRegisterJump("inc word ptr [rdi+86h];", "xmm2", "edx", framerate / 30.0f, "movss xmm3, dword ptr [rdi+54h]; mulss xmm3, xmm2; movss dword ptr [rdi+54h], xmm3; movss xmm3, dword ptr [rdi+58h]; mulss xmm3, xmm2; movss dword ptr [rdi+58h], xmm3; movss xmm3, dword ptr [rdi+5Ch]; mulss xmm3, xmm2; movss dword ptr [rdi+5Ch], xmm3;", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
+			}
 
 		}
 		else {

@@ -26,8 +26,11 @@ _Important_: The game low framerate compensation (frame skipping) doesn't work a
 
 The code is largely based on the various SilentPatches released by CookiePLMonster.
 
-
 Since this is a work in progress, what you see in the release section are what I consider important milestones, but you can get the latest nightly build [here](https://github.com/Banz99/Final-Fantasy-Type-0-Hd-Unlocker/issues/2).
+
+## Installation
+
+Download the latest release.zip from github and extract it in your FINAL FANTASY TYPE-0 HD\WIN folder. If you'd like to use the nightly release, download its zip and overwrite FFT0HD Unlocker.asi.
 
 ## Credits
 * [CookiePLMonster](https://github.com/CookiePLMonster)
