@@ -34,7 +34,6 @@ float DecreaseFloatPrecision(float input, uint8_t nbits) {
 	return *reinterpret_cast<float*>(&temp);
 }
 
-
 int LoadXMMRegisterJump(const char* previousinstructions, const char* xmmbase, const char* immediateregister, float value, const char* followinginstructions, unsigned char** encode, size_t* size)
 {
 	size_t count;
@@ -54,18 +53,18 @@ int ModifyXMMRegisterJump(const char* previousinstructions, const char* xmminstr
 //This defines a spline that interpolates the original "FF F0 C0 B0 A0 80 70 60" sequence of bytes used when defining the pulsating transparency (in a 0.0 -> 1.0 range)
 uint8_t TransparencySplineInterpolation(float x) {
 	if (x < 0.14)
-		return round(-3785.14 * x * x * x - 27.75 * x + 255);
+		return round(-3785.14 * pow(x, 3) - 27.75 * x + 255);
 	if (x < 0.29)
-		return round(7606.68 * x * x * x - 4882.21 * x * x + 669.71 * x + 221.79);
+		return round(7606.68 * pow(x, 3) - 4882.21 * pow(x, 2) + 669.71 * x + 221.79);
 	if (x < 0.43)
-		return round(-4346.59 * x * x * x + 5363.45 * x * x - 2257.63 * x + 500.58);
+		return round(-4346.59 * pow(x, 3) + 5363.45 * pow(x, 2) - 2257.63 * x + 500.58);
 	if (x < 0.57)
-		return round(-1196.32 * x * x * x + 1313.1 * x * x - 521.76 * x + 252.6);
+		return round(-1196.32 * pow(x, 3) + 1313.1 * pow(x, 2) - 521.76 * x + 252.6);
 	if (x < 0.71)
-		return round(3643.86 * x * x * x - 6984.34 * x * x + 4219.64 * x - 650.52);
+		return round(3643.86 * pow(x, 3) - 6984.34 * pow(x, 2) + 4219.64 * x - 650.52);
 	if (x < 0.86)
-		return round(-2403.12 * x * x * x + 5973.47 * x * x - 5035.95 * x + 1553.19);
-	else return round(480.62 * x * x * x - 1441.87 * x * x + 1320.06 * x - 262.82);
+		return round(-2403.12 * pow(x, 3) + 5973.47 * pow(x, 2) - 5035.95 * x + 1553.19);
+	else return round(480.62 * pow(x, 3) - 1441.87 * pow(x, 2) + 1320.06 * x - 262.82);
 }
 
 //Honestly, I have no idea why Square Enix thought that the blinking yellow arrow should have different values when in battle, but here we are (a spline for this doesn't produce a great result)
@@ -130,7 +129,7 @@ void OnInitializeHook()
 			if (framerate > 120.0f) {
 				MessageBox(
 					NULL,
-					(LPCWSTR)L"Due to technical limitations, the framerate of the game cannot exceed 120fps.\nTo make this message disappear on startup, lower the value in FFT0HD Resolution Unlocker.ini.\nThe game will now start with a 120fps cap.",
+					(LPCWSTR)L"Due to technical limitations, the framerate of the game cannot exceed 120fps.\nTo make this message disappear on startup, lower the value in FFT0HD Unlocker.ini.\nThe game will now start with a 120fps cap.",
 					(LPCWSTR)L"Framerate Warning",
 					MB_ICONWARNING | MB_OK
 				);
@@ -143,8 +142,7 @@ void OnInitializeHook()
 
 			/*[ref] points to the absolute address in the PSP elf on which similar patches were applied*/
 
-			auto baseaddress = trampoline->RawSpace(sizeof(HMODULE));
-			Patch<HMODULE>(baseaddress, GetModuleHandle(nullptr));
+			uintptr_t baseaddress = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
 
 			//Actual value used for the frame limiter (also likely to [ref: 0x0008614C] since there are no other 0.0333333 floats referenced in the code)
 			auto frameratelimit = pattern("88 88 08 3D 89 88 08 3D 35 FA 0E 3D 29 5C 0F 3D").count(1);
@@ -186,6 +184,12 @@ void OnInitializeHook()
 			Patch<uint8_t>(frint6.get_first<void>(0xC), 255.0f / ((framerate / 30.0f) * 19.0f));
 			frint6 = pattern("0E 8B C3 69 C0 00 00 00 0D 81 C7 00 00 00 FB 03").count(1);
 			Patch<uint8_t>(frint6.get_first<void>(0x8), 255.0f / ((framerate / 30.0f) * 19.0f));
+			//Random encounters timer
+			auto frint7 = pattern("00 00 C7 83 68 6E 00 00 2C 01 00 00 E8 CF 8E EF").count(1);
+			Patch<uint32_t>(frint7.get_first<void>(0x8), framerate * 10);
+			//SP support timers
+			auto frint8 = pattern("00 00 00 4C 89 53 08 6B C0 1E 89 43 04 48 8B 5C").count(1);
+			Patch<uint8_t>(frint8.get_first<void>(0x9), framerate);
 
 			//[ref: 0x000A9AF4]
 			auto charactersanimationspeed = pattern("80 A3 B6 09 00 00 F7 C7 83 D8 05 00 00 00 00 80 3F");
@@ -199,8 +203,8 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 13, frameratelimit.get_first<void>(0x4 - 4));
-				WriteOffsetValue(space + 25, frameratelimit.get_first<void>(0x4 - 4));
+				WriteOffsetValue<4>(space + 13, frameratelimit.get_first<void>(0x4));
+				WriteOffsetValue<4>(space + 25, frameratelimit.get_first<void>(0x4));
 				Patch<float>(space + 29, 1.0f / framerate);
 				WriteOffsetValue(space + size - 4, movielimit.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(movielimit.get_first<void>(0xA), space, PATCH_JUMP);
@@ -213,8 +217,8 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 8, match.get_first<void>(0xA + 0x29832D)); //Replaces 11223344, gets computed so that it points to dword_140658F70 (1 when it's in a cutscene, 0 otherwise).
-				WriteOffsetValue(space + 17, match.get_first<void>(0xA + 0x39A5FD)); //Replaces 22334455, gets computed so that it points to dword_14075B240 (I have no clue what this value is supposed to represent or be used for, all I could observe is that it was 0 whenever the cutscene shown was NOT supposed to have the movement speed changed, so i just decided to blindly use it)
+				WriteOffsetValue<1>(space + 8, baseaddress + 0x658F70); //Replaces 11223344 (1 when it's in a cutscene, other values otherwise).
+				WriteOffsetValue<1>(space + 17, baseaddress + 0x75B240); //Replaces 22334455 (I have no clue what this value is supposed to represent or be used for, all I could observe is that it was 0 whenever the cutscene shown was NOT supposed to have the movement speed changed, so i just decided to blindly use it)
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
@@ -259,7 +263,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 2, match.get_first<void>(0xC + 0x375194)); //dword_140658FA8
+				WriteOffsetValue(space + 2, baseaddress + 0x658FA8); //Replaces 375194
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x6), space, PATCH_JUMP);
 			}
@@ -270,7 +274,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 2, match.get_first<void>(0x7 + 0x374d7d)); //dword_140658FAC
+				WriteOffsetValue(space + 2, baseaddress + 0x658FAC); //Replaces 374d7d
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x7)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
 			}
@@ -319,33 +323,28 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 
-			//Gameplay fixes #1 (i.e guards falling into the ground below when dropping from the ship at the beginning of the game) Note: the check for dword_140658F3C determines if it's in a cutscene (and always use 1.0 in that case) and the < 5.0 check is for avoiding softlocks when enemies are supposed to spawn later [ref: 0x0013D75C]
-			match = pattern("8B 43 08 F3 0F 10 04 88 F3 0F 58 05 3C DE 20 00").count(1);
-
-			/* Failed attempt at fixing the imprecise float accumulation described below, rounding introduced more problems than those it fixed
-			auto floataccumulator = trampoline->RawSpace(sizeof(float));
-			size_t size;
-			if (!ks_asm_fnc(ks, "movss xmm11, dword ptr [rip + 7654321h]; mov r10, rax; call 0xfffffffffffda9b8; test rax, rax; jz B; cmp dword ptr [rax + 0x48], 0; mov rax, r10; jnz A; B: mov edx, 0x40A00000; movd xmm7, edx; comiss xmm0, xmm7; jb A; mov edx, 0x3eaaaaab; movd xmm7, edx; addss xmm11, xmm7; addss xmm0, xmm7; jmp C; A: mov edx, 0x3F800000; movd xmm7, edx; addss xmm11, xmm7; addss xmm0, xmm7; C: movss dword ptr [rip + 7654321h], xmm11; mov edx, 0x3F800000; movd xmm7, edx; comiss xmm11, xmm7; jb D; mov dword ptr [rip + 7654321h], 0; cvtss2si edx, xmm0; cvtsi2ss xmm0, edx; D: nop; jmp 0x1000000", 0, &encode, &size, &count)) {
-				space = trampoline->RawSpace(size);
-				memcpy(space, encode, size);
-				ks_free_fnc(encode);
-				WriteOffsetValue(space + 5, floataccumulator);
-				WriteOffsetValue(space + 88, floataccumulator);
-				WriteOffsetValue(space + 109, floataccumulator-4);
-				WriteOffsetValue(space + 13, match.get_first<void>(0x8 + 0xfffda9b8)); //Third byte of a mov instruction is the address, gets computed so that it points to dword_140658F70
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
-			}
-			*/
-
-			if (!ModifyXMMRegisterJump("cmp dword ptr[rip + 48h], 0; jnz A; mov edx, 0x40A00000; movd xmm7, edx; comiss xmm0, xmm7; jb A; ", "addss", "xmm0", "xmm7", "edx", DecreaseFloatPrecision(30.0f / framerate, 23), "jmp B; A: mov edx, 0x3F800000; movd xmm7, edx; addss xmm0, xmm7; B: nop", & encode, & size)) //The game expects 1.0 increments when deciding what to do next. Unfortunately adding up float values introduces errors that make the strict comparison not match. So round up to either 0.5 or 0.25.
+			//Gameplay fixes #1 (i.e guards falling into the ground below when dropping from the ship at the beginning of the game) [ref: 0x0013D75C, different approach used]
+			match = pattern("F3 0F 58 05 3C DE 20 00 F3 0F 11 04 88 0F 28 C2").count(1);
+			auto lastincrement = trampoline->Pointer<float>();
+			*lastincrement = -1.0;
+			if (!ks_asm_fnc(ks, "movss dword ptr[rip + 11223344h], xmm0; movss dword ptr[rax + rcx * 4], xmm0; jmp 0x1000000", 0, &encode, &size, &count)) //Register the last incremented variable
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 2, match.get_first<void>(0x7 + 0x2e6fc4)); //Third byte of a mov instruction is the address, gets computed so that it points to dword_140658F3C
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
+				WriteOffsetValue(space + 4, lastincrement); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xD)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
+			}
+			match = pattern("28 C8 F3 0F 11 4D 18 45 84 C0 0F 84 C9 00 00 00").count(1);
+			if (!ModifyXMMRegisterJump("movss DWORD PTR [rbp+0x18], xmm1; cmp dword ptr [rdi], 4; jz B; cmp r11d, 0x6d; jne B; comiss xmm1, dword ptr [rip + 0x00112233]; jne B; mov eax, 0x3F800000; movd xmm0, eax; comiss xmm3, xmm0; jbe B;", "mulss", "xmm3", "xmm0", "eax", framerate / 30.0f, "cvtss2si eax, xmm3; cvtsi2ss xmm3, eax; B: movss DWORD PTR [rbp + 0x30], xmm3;", &encode, &size)) //If the switch will go to case 109 (cmp r11d, 0x6d), and the value in xmm1 has been retrieved via baseaddress+0x372150() (it didn't follow the branch of cmp dword ptr [rdi], 4), then check if it's the last incremented value. If that's the case then it means that gets compared to xmm3 for triggering frame counter based events, so adjust (and truncate) xmm3 accordingly. Check for <= 1.0 to avoid softlocks.
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 19, lastincrement); //Replaces 00112233
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x7)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
 			}
 
 			//Unknown (likely Gameplay fixes #2 due to proximity) [ref: 0x0013D86C]
@@ -366,7 +365,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 4, match.get_first<void>(0x10 + 0x322dac)); //Fifth byte of a movss x86 is the address, gets computed so that it points to dword_14061141C
+				WriteOffsetValue(space + 4, baseaddress + 0x61141C); //Replaces 322dac
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
@@ -377,7 +376,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 4, match.get_first<void>(0x8 + 0x322d9e)); //Fifth byte of a movss x86 is the address, gets computed so that it points to dword_140611418
+				WriteOffsetValue(space + 4, baseaddress + 0x611418); //Replaces 322d9e
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
@@ -388,7 +387,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 5, match.get_first<void>(0xA + 0x31f642)); //Sixth byte of a movss x64 is the address, gets computed so that it points to dword_14061141C
+				WriteOffsetValue(space + 5, baseaddress + 0x61141C); //Replaces 31f642
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
 			}
@@ -456,30 +455,30 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 2, match.get_first<void>(0xB + 0x2a7bed)); //Third byte of a mul is the address, gets computed to dword_1406BEE88
+				WriteOffsetValue(space + 2, baseaddress + 0x6BEE88); //Replaces 2a7bed
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 			//In game timer when loaded from save file (for consistency between framerates, otherwise the division above while timed correctly, would have been offsetted, basically (![X]*speed!+[Y*2]*speed)/speed so that whatever increased speed is there, it's cancelled out (this is the between !! part))
 			match = pattern("0F 85 87 00 00 00 B9 BA 00 00 00 0F 1F 44 00 00 0F 28 00 4D 8D 89 80 00 00 00 48 8D 80 80 00 00 00 41 0F 29 41 80").count(1); //this pattern sucks
-			if (!ModifyXMMRegisterJump("movaps xmmword ptr [r9-80h], xmm0; mov r15, r9; sub r15, 0x78; sub r15, qword ptr [rip + 0x11223344]; cmp r15d, 0x6BEE88; jnz A; cvtsi2ss xmm11, dword ptr [r9-78h];", "mulss", "xmm11", "xmm10", "r15d", framerate / 15.0f, "cvtss2si r15d, xmm11; mov dword ptr [r9-78h], r15d; A: nop", &encode, &size)) //The game uses a weird way of loading the save file, it copies multiple values via xmmword even though they are dwords, check if dword_1406BEE88 had been written and modify it
+			if (!ModifyXMMRegisterJump("movaps xmmword ptr [r9-80h], xmm0; mov r15, 0x1122334455667788; cmp r9, r15; jnz A; cvtsi2ss xmm11, dword ptr [r9-78h];", "mulss", "xmm11", "xmm10", "r15d", framerate / 15.0f, "cvtss2si r15d, xmm11; mov dword ptr [r9-78h], r15d; A: nop", &encode, &size)) //The game uses a weird way of loading the save file, it copies multiple values via xmmword even though they are dwords, check if baseaddress + 0x6BEE88 had been written (via 256 bit write from 0x6BEE80) and modify it
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 15, baseaddress); //patched in place of 0x11223344
+				Patch<uintptr_t>(space + 7, baseaddress + 0x6BEE80 + 0x80); //Patched in place of 0x1122334455667788
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x26)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x21), space, PATCH_JUMP);
 			}
 			//Game timer when saved to the sysfile (offset 0x8 for TYPE0SYS in SYSTEMDATA (which is a memmove starting from 0x1406BEE80))
 			match = pattern("BC 97 09 00 48 8B 0D 65 0D 70 00 48 83 C1 08 E8").count(1);
-			if (!ModifyXMMRegisterJump("mov rcx, qword ptr [rip + 0x700d65]; mov r9, r15; sub r9, qword ptr [rip + 0x11223344]; cmp r9d, 0x6BEE80; jnz A; cvtsi2ss xmm11, dword ptr [rdi + 0x8];","mulss","xmm11","xmm10","r9d", 15.0f/framerate, "cvtss2si r9d, xmm11; and r9d, 0xFFFFFFFE; mov dword ptr [rdi + 0x8], r9d; A: nop", &encode, &size)) //The AND is just a failsafe, maybe not strictly necessary, but since the frame counter gets incremented by 2 every frame, having an odd number of them may cause problems.
+			if (!ModifyXMMRegisterJump("mov rcx, qword ptr [rip + 0x700d65]; mov r9, 0x1122334455667788; cmp r15, r9; jnz A; cvtsi2ss xmm11, dword ptr [rdi + 0x8];","mulss","xmm11","xmm10","r9d", 15.0f/framerate, "cvtss2si r9d, xmm11; and r9d, 0xFFFFFFFE; mov dword ptr [rdi + 0x8], r9d; A: nop", &encode, &size)) //The AND is just a failsafe, maybe not strictly necessary, but since the frame counter gets incremented by 2 every frame, having an odd number of them may cause problems.
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 3, match.get_first<void>(0xB + 0x700d65)); //Replicate jumped of instruction
-				WriteOffsetValue(space + 13, baseaddress); //patched in place of 0x11223344
+				WriteOffsetValue(space + 3, baseaddress + 0x77EC10); //Replaces 700d65
+				Patch<uintptr_t>(space + 9, baseaddress + 0x6BEE80); //Patched in place of 0x1122334455667788
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
@@ -526,7 +525,7 @@ void OnInitializeHook()
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
-				WriteOffsetValue(space + 2, match.get_first<void>(0xC + 0x2663EC)); //replaces 22334455, so that it points to dword_14063CD00
+				WriteOffsetValue(space + 2, baseaddress + 0x63CD00); //Replaces 22334455
 				Patch<uint32_t>(space + 8, transparency_frames_count);  //Replaces 11223344
 				WriteOffsetValue(space + 20, transparency_frames); //Replaces 55667788
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
@@ -535,7 +534,7 @@ void OnInitializeHook()
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 2, match.get_first<void>(0xB + 0x266085)); //replaces 22334455, so that it points to dword_14063CD00
+				WriteOffsetValue(space + 2, baseaddress + 0x63CD00); //Replaces 22334455
 				Patch<uint32_t>(space + 8, transparency_frames_count);  //Replaces 11223344
 				WriteOffsetValue(space + 20, transparency_frames); //Replaces 55667788
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
@@ -593,7 +592,7 @@ void OnInitializeHook()
 				char patternbuilt[30];
 				size_t size = 0;
 				sprintf_s(patternbuilt, "66 39 %02X 86 00 00 00", *found.get<uint8_t>(2)); // cmp word ptr [Y + 0x86], X* : X* = low 16 bits of X (same actual register, different addressing mode)
-				auto followingcomparison = pattern(reinterpret_cast<uintptr_t>(found.get<void>()), reinterpret_cast<uintptr_t>(found.get<void>(100)), patternbuilt).count_hint(1); //Read ahead for the next 100 bytes, in case some instructions were inserted between them
+				auto followingcomparison = pattern(found.get_uintptr(), found.get_uintptr(100), patternbuilt).count_hint(1); //Read ahead for the next 100 bytes, in case some instructions were inserted between them
 				if (followingcomparison.size() >= 1)
 				{
 					if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm9", "eax", framerate / 30.0f, "cvtss2si eax, xmm11;", &encode, &size))
