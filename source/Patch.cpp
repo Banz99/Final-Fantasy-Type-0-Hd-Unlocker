@@ -98,11 +98,27 @@ void OnInitializeHook()
 		}
 
 		auto renderres = pattern("75 21 41 0B C4 B9 80 07 00 00 BA 38 04 00 00").count(1);
-
 		if (renderres.size() == 1)
 		{
 			Patch<int32_t>(renderres.get_first<void>(0x6), ResX);
 			Patch<int32_t>(renderres.get_first<void>(0xB), ResY);
+		}
+
+		float aspect_ratio = static_cast<float>(ResX) / static_cast<float>(ResY);
+
+		if (aspect_ratio != 16.0f / 9.0f) //See below
+		{
+			auto geometry_aspect_ratio = pattern("00 C7 87 74 08 00 00 39 8E E3 3F C7 87 50 06 00").count(1); //This is not a FOV slider, it just rescales the geometry so that it isn't stretched in the viewport, like the HUD
+			if (geometry_aspect_ratio.size() == 1)
+			{
+				Patch<float>(geometry_aspect_ratio.get_first<void>(0x7), aspect_ratio);
+			}
+
+			auto res_mismatch_fix = pattern("00 00 00 4C 8D 05 C6 B5 5E 00 48 8D 15 AF B5 5E").count(1); //This fix seems to have the side effect of scaling the HUD via nearest neighbor, which isn't really ideal and shouldn't be engaged when the aspect ratio is already 16:9, hence the check above
+			if (res_mismatch_fix.size() == 1)
+			{
+				Patch<int8_t>(res_mismatch_fix.get_first<void>(0x6), 0xB6);
+			}
 		}
 	}
 
