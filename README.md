@@ -3,7 +3,9 @@
 ## Resolution
 
 This tool allows you inject your own resolution into the game, freeing it from the hardcoded list of resolutions that it normally ships with.
-It works by replacing the standard 1080p with your own custom width and height specified in the .ini file (the release is already configured for 2560x1440). 
+It works by replacing the standard 1080p with your own custom width and height specified in the .ini file (the release is already configured for 2560x1440).
+
+From the fourth release onwards, ultrawide and custom aspect ratios resolutions have also been properly implemented.
 
 **Make sure you have selected 1920x1080 as resolution in the game's own launcher or this won't do anything.**
 
@@ -27,6 +29,12 @@ _Important_: The game low framerate compensation (frame skipping) doesn't work a
 The code is largely based on the various SilentPatches released by CookiePLMonster.
 
 Since this is a work in progress, what you see in the release section are what I consider important milestones, but you can get the latest nightly build [here](https://github.com/Banz99/Final-Fantasy-Type-0-Hd-Unlocker/issues/2).
+
+## Field of View
+
+This is just a bonus feature that I discovered when working with ultrawide resolutions. It works by specifying a percentage of the original FOV to apply to the rendered scene, but has also a check to preserve it for cutscenes (that you can disable, should you so desire).
+
+**There is no upper bound limit to this value, however, going past 200 really starts to mess up with the geometry culling functions when moving the camera, so it isn't recommended.**
 
 ## Installation
 

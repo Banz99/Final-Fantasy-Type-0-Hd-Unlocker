@@ -122,27 +122,33 @@ void OnInitializeHook()
 		}
 	}
 
-	const int framerateint = GetPrivateProfileIntW(L"OverrideFramerate", L"FpsCap", 0, wcModulePath);
+	hDLLKeystone = LoadLibrary(L"keystone.dll");
 
-	if (framerateint > 30) {
+	ks_err err;
+	size_t count;
+	unsigned char* encode;
+	size_t size = 0;
 
-		hDLLKeystone = LoadLibrary(L"keystone.dll");
+	ks_open_fnc = (ks_open_dll)GetProcAddress(hDLLKeystone, "ks_open");
+	ks_asm_fnc = (ks_asm_dll)GetProcAddress(hDLLKeystone, "ks_asm");
+	ks_free_fnc = (ks_free_dll)GetProcAddress(hDLLKeystone, "ks_free");
 
-		ks_err err;
-		size_t count;
-		unsigned char* encode;
-		size_t size = 0;
+	if (ks_open_fnc && ks_asm_fnc && ks_free_fnc) {
 
+		err = ks_open_fnc(KS_ARCH_X86, KS_MODE_64, &ks);
 
-		ks_open_fnc = (ks_open_dll)GetProcAddress(hDLLKeystone, "ks_open");
-		ks_asm_fnc = (ks_asm_dll)GetProcAddress(hDLLKeystone, "ks_asm");
-		ks_free_fnc = (ks_free_dll)GetProcAddress(hDLLKeystone, "ks_free");
+		Trampoline* trampoline = Trampoline::MakeTrampoline(GetModuleHandle(nullptr));
+		uintptr_t baseaddress = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+		std::byte* space;
+		auto match = pattern("");
 
-		if (ks_open_fnc && ks_asm_fnc && ks_free_fnc) {
+		const int framerateint = GetPrivateProfileIntW(L"OverrideFramerate", L"FpsCap", 0, wcModulePath);
 
+		if (framerateint > 30)
+		{
 			float framerate = framerateint;
-
-			if (framerate > 120.0f) {
+			if (framerate > 120.0f)
+			{
 				MessageBox(
 					NULL,
 					(LPCWSTR)L"Due to technical limitations, the framerate of the game cannot exceed 120fps.\nTo make this message disappear on startup, lower the value in FFT0HD Unlocker.ini.\nThe game will now start with a 120fps cap.",
@@ -152,13 +158,7 @@ void OnInitializeHook()
 				framerate = 120.0f;
 			}
 
-			Trampoline* trampoline = Trampoline::MakeTrampoline(GetModuleHandle(nullptr));
-			std::byte* space;
-			err = ks_open_fnc(KS_ARCH_X86, KS_MODE_64, &ks);
-
 			/*[ref] points to the absolute address in the PSP elf on which similar patches were applied*/
-
-			uintptr_t baseaddress = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
 
 			//Actual value used for the frame limiter (also likely to [ref: 0x0008614C] since there are no other 0.0333333 floats referenced in the code)
 			auto frameratelimit = pattern("88 88 08 3D 89 88 08 3D 35 FA 0E 3D 29 5C 0F 3D").count(1);
@@ -213,8 +213,7 @@ void OnInitializeHook()
 
 			//Relock the game back to 30fps when prerendered cutscenes are playing
 			auto movielimit = pattern("02 32 C9 48 8B 05 7E F9 60 00 88 88 D0 00 00 00").count(1);
-			size_t size;
-			if (!ks_asm_fnc(ks,"mov [rax + 0D0h], cl; cmp cl, 0; je A; mov dword ptr [rip + 0x410e3a], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x410e3a], 0x3C888889; B: jmp 0x10000000",0,&encode,&size,&count))
+			if (!ks_asm_fnc(ks,"mov [rax + 0D0h], cl; cmp cl, 0; je A; mov dword ptr [rip + 0x410e3a], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x410e3a], 0x3C888889; B: jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -227,7 +226,7 @@ void OnInitializeHook()
 			}
 
 			//Characters walking speeds (with check for cutscenes) [ref: 0x00083CF8]
-			auto match = pattern("24 0F 28 CE F3 0F 59 4C 24 20 F3 0F 11 43 1C F3").count(1);
+			match = pattern("24 0F 28 CE F3 0F 59 4C 24 20 F3 0F 11 43 1C F3").count(1);
 			if (!ModifyXMMRegisterJump("mulss xmm1, dword ptr [rsp + 0x20]; cmp dword ptr [rip + 0x11223344], 1; jnz A; cmp dword ptr [rip + 0x22334455], 0; jz B; A:nop;", "mulss", "xmm1", "xmm7", "edx", 30.0f / framerate, "mulss xmm6, xmm7; B: nop", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
@@ -673,16 +672,35 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
 			}
+		}
 
+		const float fovoverride = GetPrivateProfileIntW(L"FOV", L"FOVPercentage", 0, wcModulePath) / 100.0f;
+		if (fovoverride > 0.0f)
+		{
+			auto keepcutscenefov = trampoline->Pointer<int8_t>();
+			*keepcutscenefov = GetPrivateProfileIntW(L"FOV", L"KeepCutsceneFOV", 1, wcModulePath);
+
+			match = pattern("0F 59 35 45 41 1D 00 44 0F 29 50 A8 44 0F 29 58").count(1);
+			if (!ModifyXMMRegisterJump("movaps xmmword ptr [rax-58h], xmm10; cmp byte ptr [rip + 0x11223344], 1; jnz A; cmp dword ptr [rip + 0x55667788], 1; jz B; A: nop", "mulss", "xmm6", "xmm0", "r14d", fovoverride, "B: nop", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue<1>(space + 7, keepcutscenefov); //Replaces 11223344
+				WriteOffsetValue<1>(space + 16, baseaddress + 0x658F70); // Replaces 55667788
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
 		}
-		else {
-			MessageBox(
-				NULL,
-				(LPCWSTR)L"Couldn't locate the required functions in keystone.dll for the framerate patch.\nMake sure you are using the included keystone.dll in this folder from the github release.",
-				(LPCWSTR)L"keystone.dll Error",
-				MB_ICONWARNING | MB_OK
-			);
-		}
+
+	}
+	else {
+		MessageBox(
+			NULL,
+			(LPCWSTR)L"Couldn't locate the required functions in keystone.dll for the patch.\nMake sure you are using the included keystone.dll in this folder from the github release.",
+			(LPCWSTR)L"keystone.dll Error",
+			MB_ICONWARNING | MB_OK
+		);
 	}
 }
 
