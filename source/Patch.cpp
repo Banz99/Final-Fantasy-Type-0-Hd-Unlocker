@@ -25,7 +25,8 @@ ks_asm_dll ks_asm_fnc;
 ks_free_dll ks_free_fnc;
 HMODULE hDLLKeystone;
 
-float DecreaseFloatPrecision(float input, uint8_t nbits) {
+float DecreaseFloatPrecision(float input, uint8_t nbits)
+{
 	if (nbits == 0)
 		return input;
 	uint32_t mask = 0xFFFFFFFF - (static_cast<uint32_t>(pow(2, nbits) - 1));
@@ -51,7 +52,8 @@ int ModifyXMMRegisterJump(const char* previousinstructions, const char* xmminstr
 }
 
 //This defines a spline that interpolates the original "FF F0 C0 B0 A0 80 70 60" sequence of bytes used when defining the pulsating transparency (in a 0.0 -> 1.0 range)
-uint8_t TransparencySplineInterpolation(float x) {
+uint8_t TransparencySplineInterpolation(float x)
+{
 	if (x < 0.14)
 		return round(-3785.14 * pow(x, 3) - 27.75 * x + 255);
 	if (x < 0.29)
@@ -74,6 +76,20 @@ uint8_t TransparencyLinearInterpolation(float x) {
 	if (x < 0.68)
 		return 250;
 	else return round(-703.125 * x + 728.125);
+}
+
+
+float BouncingPatternParabola(int steps, int Nthstep, float maxheight)
+{
+	float X_peak = (steps - 1) / 2.0f;
+	float Y_peak = maxheight;
+
+	//Parabola that crosses the origin and has vertex at Xpeak, Ypeak
+	float c = 0;
+	float b = 2 * Y_peak / X_peak;
+	float a = -b / (X_peak * 2);
+
+	return a * pow(Nthstep, 2) + b * Nthstep + c;
 }
 
 void OnInitializeHook()
@@ -206,21 +222,25 @@ void OnInitializeHook()
 			//SP support timers
 			auto frint8 = pattern("00 00 00 4C 89 53 08 6B C0 1E 89 43 04 48 8B 5C").count(1);
 			Patch<uint8_t>(frint8.get_first<void>(0x9), framerate);
+			//Minimap popup delay in the upper right corner when an area text is being shown (on the field)
+			auto frint9 = pattern("8B 05 8A A9 1F 00 B9 AA 00 00 00 3B EE 0F 4C C1").count(1);
+			Patch<uint32_t>(frint9.get_first<void>(0x7), (framerate / 30.0f) * 170.0f);
 
 			//[ref: 0x000A9AF4]
 			auto charactersanimationspeed = pattern("80 A3 B6 09 00 00 F7 C7 83 D8 05 00 00 00 00 80 3F");
 			Patch<float>(charactersanimationspeed.get_first<void>(0xD), framerate != 60.0f ? 30.0f / framerate : 29.9f / framerate); //The lip sync function that the game uses for real time cutscenes REALLY doesn't like 0.5f as a value here.
 
-			//Relock the game back to 30fps when prerendered cutscenes are playing
+			//Relock the game back to 30fps when prerendered cutscenes are playing (and unlock it again if needed when the skip cutscene menu shows up so it isn't slowed down (it still is when fading out, can't change that or audio would get out of sync))
 			auto movielimit = pattern("02 32 C9 48 8B 05 7E F9 60 00 88 88 D0 00 00 00").count(1);
-			if (!ks_asm_fnc(ks,"mov [rax + 0D0h], cl; cmp cl, 0; je A; mov dword ptr [rip + 0x410e3a], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x410e3a], 0x3C888889; B: jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks,"mov [rax + 0D0h], cl; cmp cl, 0; je A; cmp dword ptr [rip + 0x11223344], 1; je A; mov dword ptr [rip + 0x22334455], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x33445566], 0x3C888889; B: jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue<4>(space + 13, frameratelimit.get_first<void>(0x4));
-				WriteOffsetValue<4>(space + 25, frameratelimit.get_first<void>(0x4));
-				Patch<float>(space + 29, 1.0f / framerate);
+				WriteOffsetValue<1>(space + 13, baseaddress + 0x75B7CC); //Replaces 11223344 (1 when the skip cutscene menu is showing, 0 otherwise)
+				WriteOffsetValue<4>(space + 22, frameratelimit.get_first<void>(0x4)); //Replaces 22334455
+				WriteOffsetValue<4>(space + 34, frameratelimit.get_first<void>(0x4)); //Replaces 33445566
+				Patch<float>(space + 38, 1.0f / framerate); //Replaces 0x3C888889 (0x3D088889 is 1.0/30.0)
 				WriteOffsetValue(space + size - 4, movielimit.get_first<void>(0x10)); //Fill the final jump with the correct address
 				InjectHook(movielimit.get_first<void>(0xA), space, PATCH_JUMP);
 			}
@@ -600,30 +620,93 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x13), space, PATCH_JUMP);
 			}
 
-			//General frame counter based actions (bullets range (Ace's cards, rocket launcher guy), charged attacks etc.)
-			pattern("0F B7 ? 88 00 00 00").for_each_result([framerate, trampoline] (auto found) // movzx X, word ptr [Y + 88h] : X = general purpose 32 bit register, Y = general purpose 64 bit register
+			//New setup for frame counter based fixes
+			auto interleavedincrement = trampoline->Pointer<float>();
+			auto propagatecounters = trampoline->Pointer<uint8_t>();
+			match = pattern("48 89 3B C6 43 08 01 48 8B 5C 24 40 48 83 C4 20").count(1);
+			if (!ModifyXMMRegisterJump("mov ebx, 0x41200000; movd xmm2, ebx; comiss xmm2, dword ptr [rip + 0x11223344]; jnb A; mov dword ptr [rip + 0x22334455], 0; A: movss xmm2, dword ptr [rip + 0x33445566];", "addss", "xmm2", "xmm1", "ebx", 30.0f / framerate, "movss xmm1, dword ptr [rip + 0x44556633]; movss dword ptr [rip + 0x22445566], xmm2; cvttss2si ebx, xmm2; cvtsi2ss xmm2, ebx; comiss xmm2, xmm1; mov byte ptr [rip + 0x11332244], 0; jbe B; mov byte ptr [rip + 0x33221144], 1; B: mov rbx, qword ptr [rsp + 0x40]", &encode, &size)) //Use a slightly convoluted way to decide if this rendered frame will update counters (done immediately after renderer sleep, the check for >10 is just to reset the float counter to avoid floating point errors)
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 12, interleavedincrement); //Replaces 11223344
+				WriteOffsetValue<4>(space + 20, interleavedincrement); //Replaces 22334455
+				WriteOffsetValue(space + 32, interleavedincrement); //Replaces 33445566
+				WriteOffsetValue(space + 53, interleavedincrement); //Replaces 44556633
+				WriteOffsetValue(space + 61, interleavedincrement); //Replaces 22445566
+				WriteOffsetValue<1>(space + 78, propagatecounters); //Replaces 11332244
+				WriteOffsetValue<1>(space + 87, propagatecounters); //Replaces 33221144
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+
+			//RTS missions bases regen speed
+			match = pattern("00 FF C1 48 85 C0 75 08 8B 96 0C 02 00 00 EB 06").count(1);
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; inc ecx; A: test rax, rax; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x6)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
+			}
+			//RTS missions troop respawn time
+			match = pattern("00 00 66 85 C0 7E 0A 66 FF C8 66 89 86 BC 01 00").count(1);
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec ax; A:mov [rsi+1BCh], ax; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x11)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+
+			//General frame counter based actions #1 (bullets range (Ace's cards, rocket launcher guy), charged attacks, Nine's jump etc.)
+			pattern("66 FF ? 86 00 00 00").for_each_result([framerate, trampoline, propagatecounters] (auto found)
 			{
 				unsigned char* encode;
-				char patternbuilt[30];
-				size_t size = 0;
-				sprintf_s(patternbuilt, "66 39 %02X 86 00 00 00", *found.get<uint8_t>(2)); // cmp word ptr [Y + 0x86], X* : X* = low 16 bits of X (same actual register, different addressing mode)
-				auto followingcomparison = pattern(found.get_uintptr(), found.get_uintptr(100), patternbuilt).count_hint(1); //Read ahead for the next 100 bytes, in case some instructions were inserted between them
-				if (followingcomparison.size() >= 1)
+				size_t size;
+				size_t count;
+				if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; inc word ptr [rdi+86h]; A: jmp 0x10000000", 0, &encode, &size, &count))
 				{
-					if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm9", "eax", framerate / 30.0f, "cvtss2si eax, xmm11;", &encode, &size))
+					auto space = trampoline->RawSpace(size);
+					memcpy(space, encode, size);
+					ks_free_fnc(encode);
+					WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
+					Patch<uint8_t>(space + 11, *found.get<uint8_t>(2));
+					WriteOffsetValue(space + size - 4, found.get<void>(0x7)); //Fill the final jump with the correct address
+					InjectHook(found.get<void>(), space, PATCH_JUMP);
+				}
+			});
+			//#2, with inc and mov instead of just inc for whatever reason
+			pattern("66 FF ? 66 89 ? 86 00 00 00").for_each_result([framerate, trampoline, propagatecounters] (auto found) // movzx X, word ptr [Y + 88h] : X = general purpose 32 bit register, Y = general purpose 64 bit register
+			{
+				auto inc_reg_byte = *found.get<uint8_t>(2);
+				auto mov_reg_byte = *found.get<uint8_t>(5);
+				if ((inc_reg_byte & 0xF8) == 0xC0) //make sure it's an inc and not a dec
+				{
+					if ((mov_reg_byte & 0xC0) == 0x80) //make sure it's a valid mov
 					{
-						auto space = trampoline->RawSpace(size + 7);
-						memcpy(space, found.get<void>(), 7); //Copy the same movzx instruction as is
-						space += 7;
-						memcpy(space, encode, size);
-						ks_free_fnc(encode);
-						uint8_t reg = (*found.get<uint8_t>(2) >> 3) & 0x7; //Evil x86 bit hackery to get the general purpose register out of the opcode (what would be X in the instructions above)
-						Patch<uint8_t>(space + 4, 0xD8 | reg); //Replaces eax in cvtsi2ss xmm11, eax
-						Patch<uint8_t>(space + 5, 0xB8 | reg); //Replaces eax in mov eax, framerate/30.0f (added by ModifyXMMRegisterJump)
-						Patch<uint8_t>(space + 14, 0xC8 | reg); //Replaces eax in movd xmm9, eax (added by ModifyXMMRegisterJump)
-						Patch<uint8_t>(space + 24, 0xC3 | (reg << 3)); //Replaces eax in cvtss2si eax, xmm11;
-						WriteOffsetValue(space + size - 4, found.get<void>(0x7)); //Fill the final jump with the correct address
-						InjectHook(found.get<void>(), space - 7, PATCH_JUMP);
+						auto value_reg = inc_reg_byte & 0x7;
+						if (value_reg == ((mov_reg_byte >> 3) & 0x7)) //makes sure it's referring to the same register
+						{
+							unsigned char* encode;
+							size_t size;
+							size_t count;
+							if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; inc ax; A: mov [rdi+86h], ax; jmp 0x10000000", 0, &encode, &size, &count))
+							{
+								auto space = trampoline->RawSpace(size);
+								memcpy(space, encode, size);
+								ks_free_fnc(encode);
+								WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
+								Patch<uint8_t>(space + 11, inc_reg_byte);
+								Patch<uint8_t>(space + 14, mov_reg_byte);
+								WriteOffsetValue(space + size - 4, found.get<void>(0xA)); //Fill the final jump with the correct address
+								InjectHook(found.get<void>(), space, PATCH_JUMP);
+							}
+						}
 					}
 				}
 			});
@@ -663,15 +746,93 @@ void OnInitializeHook()
 			}
 
 			//Rocket Launcher guy projectile speed (instead of being set every time the function is called, it's only done once, so it needs to be reset for the next cycle)
-			match = pattern("8F 20 00 66 FF 87 86 00 00 00 48 8B 8D 10 01 00").count(1);
-			if (!LoadXMMRegisterJump("inc word ptr [rdi+86h];", "xmm2", "edx", framerate / 30.0f, "movss xmm3, dword ptr [rdi+54h]; mulss xmm3, xmm2; movss dword ptr [rdi+54h], xmm3; movss xmm3, dword ptr [rdi+58h]; mulss xmm3, xmm2; movss dword ptr [rdi+58h], xmm3; movss xmm3, dword ptr [rdi+5Ch]; mulss xmm3, xmm2; movss dword ptr [rdi+5Ch], xmm3;", &encode, &size))
+			match = pattern("00 00 48 8B 8D 10 01 00 00 48 33 CC E8 4F 50 E8").count(1);
+			if (!LoadXMMRegisterJump("mov rcx, qword ptr [rbp + 0x110];", "xmm2", "edx", framerate / 30.0f, "movss xmm3, dword ptr [rdi+54h]; mulss xmm3, xmm2; movss dword ptr [rdi+54h], xmm3; movss xmm3, dword ptr [rdi+58h]; mulss xmm3, xmm2; movss dword ptr [rdi+58h], xmm3; movss xmm3, dword ptr [rdi+5Ch]; mulss xmm3, xmm2; movss dword ptr [rdi+5Ch], xmm3;", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
+			}
+
+			//Deuce flute energy sphere horizontal orbit
+			auto bouncing_orb_animation_index = trampoline->Pointer<uint8_t>();
+			match = pattern("F3 0F 58 05 A8 5B 2C 00 0F 2F C1 F3 0F 11 83 FC").count(1);
+			if (!LoadXMMRegisterJump("", "xmm4", "r10d", 30.0f / framerate, "mulss xmm4, dword ptr [rip + 0x22334455]; addss xmm0, xmm4", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 15, baseaddress + 0x57FBE8);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0), space, PATCH_JUMP);
+			}
+			//Deuce flute energy sphere vertical orbit
+			match = pattern("04 01 00 00 F3 0F 58 05 34 5B 2C 00 0F 2F C1 F3").count(1);
+			if (!LoadXMMRegisterJump("", "xmm4", "r10d", 30.0f / framerate, "mulss xmm4, dword ptr [rip + 0x22334455]; addss xmm0, xmm4; mov byte ptr [rip + 0x44556677], 0", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 15, baseaddress + 0x57FBA8);
+				WriteOffsetValue<1>(space + 25, bouncing_orb_animation_index); //If we are in a vertical orbit, then it means the sphere is not bouncing and viceversa
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
+			//Deuce flute energy sphere bouncing pattern
+			auto bouncing_heigths_count = trampoline->Pointer<uint8_t>();
+			*bouncing_heigths_count = (20.0f * framerate / 30.0f) + 1; //This +1 is for all intents and purposes an error on Square Enix's side, but for artistic reasons I decided to keep it
+			auto bouncing_heigths = reinterpret_cast<float*>(trampoline->RawSpace(*bouncing_heigths_count * sizeof(float)));
+			for (uint8_t i = 0; i < *bouncing_heigths_count; i++)
+			{
+				bouncing_heigths[i] = BouncingPatternParabola(*bouncing_heigths_count - 1, i, 45.125f);
+			}
+			match = pattern("0F 2F F0 F3 0F 11 83 04 01 00 00 76 0B 48 C7 83").count(1);
+			if (!ks_asm_fnc(ks, "lea rax, [rip + 0x55667788]; xor r10,r10; mov r10b, byte ptr [rip + 0x22334455]; movss xmm0, dword ptr [rax+4*r10]; movss dword ptr[rbx + 0x104], xmm0; inc r10d; cmp byte ptr [rip + 0x77665544], r10b; jg A; xor r10, r10; A: mov byte ptr [rip + 0x22334455], r10b; comiss xmm14, xmm0; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 3, bouncing_heigths);
+				WriteOffsetValue(space + 13, bouncing_orb_animation_index);
+				WriteOffsetValue(space + 37, bouncing_heigths_count);
+				WriteOffsetValue(space + 49, bouncing_orb_animation_index);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
 			}
+			//Deuce flute energy sphere when following targets
+			match = pattern("C8 80 E1 01 F3 44 0F 11 43 54 F3 44 0F 11 53 58").count(1);
+			if (!LoadXMMRegisterJump("mulss xmm9, xmm7; mulss xmm9, xmm1;", "xmm4", "r10d", 30.0f / framerate, "mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx+54h], xmm8; movss dword ptr [rbx+58h], xmm10; movss dword ptr [rbx+5Ch], xmm9", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x20)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
+			//Deuce flute energy sphere when going back to Deuce
+			match = pattern("0F B6 0D C0 ED 39 00 F3 44 0F 11 43 54 F3 44 0F").count(1);
+			if (!LoadXMMRegisterJump("lea rdx, [rbx + 44h]; mov eax, 20h; and cl, 1;", "xmm4", "r10d", 30.0f / framerate, "mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx+54h], xmm8; movss dword ptr [rbx+58h], xmm10; movss dword ptr [rbx+5Ch], xmm9", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x25)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+			//Deuce flute energy sphere fading away in the last 5 seconds
+			match = pattern("00 00 00 F3 0F 10 3D 55 59 2C 00 2B C8 66 0F 6E").count(1);
+			if (!LoadXMMRegisterJump("", "xmm4", "r10d", framerate / 30.0f, "cvtsi2ss xmm7, ecx; mulss xmm7, xmm4; cvtss2si ecx, xmm7; movss xmm7, dword ptr [rip + 0x2c5955]; mulss xmm7, xmm4", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 27, baseaddress + 0x580190);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
+			}
+
 		}
 
 		const float fovoverride = GetPrivateProfileIntW(L"FOV", L"FOVPercentage", 0, wcModulePath) / 100.0f;
