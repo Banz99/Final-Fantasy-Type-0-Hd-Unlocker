@@ -225,10 +225,30 @@ void OnInitializeHook()
 			//Minimap popup delay in the upper right corner when an area text is being shown (on the field)
 			auto frint9 = pattern("8B 05 8A A9 1F 00 B9 AA 00 00 00 3B EE 0F 4C C1").count(1);
 			Patch<uint32_t>(frint9.get_first<void>(0x7), (framerate / 30.0f) * 170.0f);
+			//RTS turret
+			auto frint10 = pattern("00 00 B8 3C 00 00 00 66 89 87 D4 01 00 00 B8 02").count(1);
+			Patch<uint32_t>(frint10.get_first<void>(0x3), ((framerate * 2.0f - 30.0f) / 30.0f) * 60.0f); //Also take into consideration the time for moving down
+			frint10 = pattern("1D B8 06 00 00 00 66 89 B7 C8 01 00 00 66 89 87").count(1);
+			Patch<uint32_t>(frint10.get_first<void>(0x2), (framerate / 30.0f) * 6.0f);
+			frint10 = pattern("E2 7E 06 41 83 EE 02 EB 06 41 BE E2 FF FF FF 45").count(1);
+			Patch<int8_t>(frint10.get_first<void>(), (framerate / 30.0f) * -30.0f);
+			Patch<int32_t>(frint10.get_first<void>(0xB), (framerate / 30.0f) * -30.0f);
+			frint10 = pattern("41 83 FD 02 0F 87 AA 03 00 00 41 83 FE E2 0F 85").count(1);
+			Patch<int8_t>(frint10.get_first<void>(0xD), (framerate / 30.0f) * -30.0f);
+			//RTS Fort reshooting time
+			auto frint11 = pattern("FF FF E8 D9 6C FF FF B8 64 00 00 00 66 89 86 C2").count(1);
+			Patch<uint32_t>(frint11.get_first<void>(0x8), (framerate / 30.0f) * 100.0f);
+			//RTS MP regen interval near Fort
+			auto frint12 = pattern("D0 E8 22 6A D4 FF B8 19 00 00 00 66 89 83 BE 01").count(1);
+			Patch<uint32_t>(frint12.get_first<void>(0x7), (framerate / 30.0f) * 25.0f);
 
 			//[ref: 0x000A9AF4]
 			auto charactersanimationspeed = pattern("80 A3 B6 09 00 00 F7 C7 83 D8 05 00 00 00 00 80 3F");
 			Patch<float>(charactersanimationspeed.get_first<void>(0xD), framerate != 60.0f ? 30.0f / framerate : 29.9f / framerate); //The lip sync function that the game uses for real time cutscenes REALLY doesn't like 0.5f as a value here.
+
+			//Enabling this, while fixing the animation delta to be correct, causes the damage trigger to be repeated multiple times, so for now it stays disabled
+			//auto rtsanimationspeed = pattern("85 D2 74 0A C7 82 0C 06 00 00 00 00 80 3F 48 83").count(1);
+			//Patch<float>(rtsanimationspeed.get_first<void>(0xA), 30.0f / framerate);
 
 			//Relock the game back to 30fps when prerendered cutscenes are playing (and unlock it again if needed when the skip cutscene menu shows up so it isn't slowed down (it still is when fading out, can't change that or audio would get out of sync))
 			auto movielimit = pattern("02 32 C9 48 8B 05 7E F9 60 00 88 88 D0 00 00 00").count(1);
@@ -372,7 +392,7 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
 			match = pattern("28 C8 F3 0F 11 4D 18 45 84 C0 0F 84 C9 00 00 00").count(1);
-			if (!ModifyXMMRegisterJump("movss DWORD PTR [rbp+0x18], xmm1; cmp dword ptr [rdi], 4; jz B; cmp r11d, 0x6d; jne B; comiss xmm1, dword ptr [rip + 0x00112233]; jne B; mov eax, 0x3F800000; movd xmm0, eax; comiss xmm3, xmm0; jbe B;", "mulss", "xmm3", "xmm0", "eax", framerate / 30.0f, "cvtss2si eax, xmm3; cvtsi2ss xmm3, eax; B: movss DWORD PTR [rbp + 0x30], xmm3;", &encode, &size)) //If the switch will go to case 109 (cmp r11d, 0x6d), and the value in xmm1 has been retrieved via baseaddress+0x372150() (it didn't follow the branch of cmp dword ptr [rdi], 4), then check if it's the last incremented value. If that's the case then it means that gets compared to xmm3 for triggering frame counter based events, so adjust (and truncate) xmm3 accordingly. Check for <= 1.0 to avoid softlocks.
+			if (!ModifyXMMRegisterJump("movss DWORD PTR [rbp+0x18], xmm1; cmp dword ptr [rdi], 4; jz B; cmp r11d, 0x6d; jne B; comiss xmm1, dword ptr [rip + 0x00112233]; jne B; mov eax, 0x40A00000; movd xmm0, eax; comiss xmm3, xmm0; jbe B;", "mulss", "xmm3", "xmm0", "eax", framerate / 30.0f, "cvtss2si eax, xmm3; cvtsi2ss xmm3, eax; B: movss DWORD PTR [rbp + 0x30], xmm3;", &encode, &size)) //If the switch will go to case 109 (cmp r11d, 0x6d), and the value in xmm1 has been retrieved via baseaddress+0x372150() (it didn't follow the branch of cmp dword ptr [rdi], 4), then check if it's the last incremented value. If that's the case then it means that gets compared to xmm3 for triggering frame counter based events, so adjust (and truncate) xmm3 accordingly. Check for <= 5.0 to avoid softlocks.
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -624,18 +644,15 @@ void OnInitializeHook()
 			auto interleavedincrement = trampoline->Pointer<float>();
 			auto propagatecounters = trampoline->Pointer<uint8_t>();
 			match = pattern("48 89 3B C6 43 08 01 48 8B 5C 24 40 48 83 C4 20").count(1);
-			if (!ModifyXMMRegisterJump("mov ebx, 0x41200000; movd xmm2, ebx; comiss xmm2, dword ptr [rip + 0x11223344]; jnb A; mov dword ptr [rip + 0x22334455], 0; A: movss xmm2, dword ptr [rip + 0x33445566];", "addss", "xmm2", "xmm1", "ebx", 30.0f / framerate, "movss xmm1, dword ptr [rip + 0x44556633]; movss dword ptr [rip + 0x22445566], xmm2; cvttss2si ebx, xmm2; cvtsi2ss xmm2, ebx; comiss xmm2, xmm1; mov byte ptr [rip + 0x11332244], 0; jbe B; mov byte ptr [rip + 0x33221144], 1; B: mov rbx, qword ptr [rsp + 0x40]", &encode, &size)) //Use a slightly convoluted way to decide if this rendered frame will update counters (done immediately after renderer sleep, the check for >10 is just to reset the float counter to avoid floating point errors)
+			if (!ModifyXMMRegisterJump("movss xmm2, dword ptr [rip + 0x11223344];", "addss", "xmm2", "xmm1", "ebx", 30.0f / framerate, "mov ebx, 0x3F800000; movd xmm1, ebx; comiss xmm2, xmm1; mov byte ptr [rip + 0x22334455], 0; jb A; subss xmm2, xmm1; mov byte ptr [rip + 0x33445566], 1; A: movss dword ptr [rip + 0x44556677], xmm2; mov rbx, qword ptr [rsp + 0x40]", &encode, &size)) //Use a slightly convoluted way to decide if this rendered frame will update counters (done immediately after renderer sleep)
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
-				WriteOffsetValue(space + 12, interleavedincrement); //Replaces 11223344
-				WriteOffsetValue<4>(space + 20, interleavedincrement); //Replaces 22334455
-				WriteOffsetValue(space + 32, interleavedincrement); //Replaces 33445566
-				WriteOffsetValue(space + 53, interleavedincrement); //Replaces 44556633
-				WriteOffsetValue(space + 61, interleavedincrement); //Replaces 22445566
-				WriteOffsetValue<1>(space + 78, propagatecounters); //Replaces 11332244
-				WriteOffsetValue<1>(space + 87, propagatecounters); //Replaces 33221144
+				WriteOffsetValue(space + 4, interleavedincrement); //Replaces 11223344
+				WriteOffsetValue<1>(space + 35, propagatecounters); //Replaces 22334455
+				WriteOffsetValue<1>(space + 48, propagatecounters); //Replaces 33445566
+				WriteOffsetValue(space + 57, interleavedincrement); //Replaces 44556677
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
 			}
@@ -660,6 +677,57 @@ void OnInitializeHook()
 				ks_free_fnc(encode);
 				WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x11)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+			//RTS requests countdown
+			match = pattern("88 1F 05 00 00 FF C8 41 0F 48 C4 89 85 A0 00 00").count(1);
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec eax; A:test eax, eax; cmovs eax, r12d; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
+			}
+			//RTS Troop reshooting time
+			match = pattern("7E 22 66 FF C9 66 89 8B D8 01 00 00 0F BF C1 74").count(1);
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec cx; A:mov [rbx+1D8h], cx; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
+			}
+			match = pattern("66 FF C8 66 89 83 D8 01 00 00 98 0F 85 BD 03 00").count(1);
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec ax; A:mov [rbx+1D8h], ax; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0), space, PATCH_JUMP);
+			}
+			//RTS Projectile duration
+			match = pattern("F0 66 89 B3 BC 01 00 00 48 8B 87 A0 01 00 00 48").count(1);
+			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, esi;", "mulss", "xmm11", "xmm10", "esi", framerate / 30.0f, "cvtss2si esi, xmm11; mov [rbx+1BCh], si", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
+			}
+			match = pattern("66 0F 6E C0 0F 5B C0 0F 2F 05 1E 9E 12 00 76 1E").count(1);
+			if (!LoadXMMRegisterJump("", "xmm10", "eax", (framerate / 30.0f) * 40.0f, "comiss xmm0, xmm10", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xE)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
 			}
 
@@ -710,6 +778,27 @@ void OnInitializeHook()
 					}
 				}
 			});
+
+			//HP regen speed
+			match = pattern("07 03 F0 EB 02 03 F3 8B C6 99 83 E2 7F 03 C2 C1").count(1);
+			if (!ks_asm_fnc(ks, "mov r8d, 0x11223344; xor edx, edx; mov eax, esi; div r8d; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				Patch<uint32_t>(space + 2, 128 * (framerate / 30.0f)); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x12)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+			match = pattern("B9 0F 27 00 00 F7 D9 41 8B D0 C1 E1 07 03 F1 8B").count(1);
+			if (!ks_asm_fnc(ks, "mov esi, edx; mov edx, r8d; jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xF)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
 
 			/*Specific characters moveset fixes*/
 
@@ -829,6 +918,36 @@ void OnInitializeHook()
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
 				WriteOffsetValue(space + 27, baseaddress + 0x580190);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
+			}
+
+			//RTS turret animation timings
+			match = pattern("7E 06 41 83 EE 02 EB 06 41 BE").count(1); //Delay before rising
+			if (!ks_asm_fnc(ks, "cmp word ptr [rdi + 1B0h], 0; jle A; dec word ptr [rdi + 1B0h]; jmp B; A:sub r14d, 2; B: jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xE)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
+			}
+			match = pattern("00 0F 5B C0 F3 0F 59 05 B8 84 12 00 F3 0F 5E C7").count(1); //Adjust tilt when rising
+			if (!ModifyXMMRegisterJump("", "mulss", "xmm0", "xmm1", "eax", 3.14159f * (30.0f / framerate), "", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
+			}
+			match = pattern("0F 5B C0 F3 0F 59 05 E9 87 12 00 F3 0F 5E 05 49").count(1); //Adjust tilt when falling (and set the delay)
+			if (!ModifyXMMRegisterJump("mov word ptr [rsi + 1B0h], 0x1122", "mulss", "xmm0", "xmm15", "eax", 3.14159f * (30.0f / framerate), "", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				Patch<uint16_t>(space + 7, 45 * (framerate / 30.0f - 1)); //This delay has been adjusted manually by having both versions checked side by side, but there is no mathematical explaination for it other than maybe having missed a counter somewhere else
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
 			}
