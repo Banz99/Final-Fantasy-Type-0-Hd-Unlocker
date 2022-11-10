@@ -246,13 +246,13 @@ void OnInitializeHook()
 			auto charactersanimationspeed = pattern("80 A3 B6 09 00 00 F7 C7 83 D8 05 00 00 00 00 80 3F");
 			Patch<float>(charactersanimationspeed.get_first<void>(0xD), framerate != 60.0f ? 30.0f / framerate : 29.9f / framerate); //The lip sync function that the game uses for real time cutscenes REALLY doesn't like 0.5f as a value here.
 
-			//Enabling this, while fixing the animation delta to be correct, causes the damage trigger to be repeated multiple times, so for now it stays disabled
-			//auto rtsanimationspeed = pattern("85 D2 74 0A C7 82 0C 06 00 00 00 00 80 3F 48 83").count(1);
-			//Patch<float>(rtsanimationspeed.get_first<void>(0xA), 30.0f / framerate);
+			//Always use in conjunction with $ or damage will be registered multiple times
+			auto rtsanimationspeed = pattern("85 D2 74 0A C7 82 0C 06 00 00 00 00 80 3F 48 83").count(1);
+			Patch<float>(rtsanimationspeed.get_first<void>(0xA), 30.0f / framerate);
 
 			//Relock the game back to 30fps when prerendered cutscenes are playing (and unlock it again if needed when the skip cutscene menu shows up so it isn't slowed down (it still is when fading out, can't change that or audio would get out of sync))
 			auto movielimit = pattern("02 32 C9 48 8B 05 7E F9 60 00 88 88 D0 00 00 00").count(1);
-			if (!ks_asm_fnc(ks,"mov [rax + 0D0h], cl; cmp cl, 0; je A; cmp dword ptr [rip + 0x11223344], 1; je A; mov dword ptr [rip + 0x22334455], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x33445566], 0x3C888889; B: jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks,"mov [rax + 0xD0], cl; cmp cl, 0; je A; cmp dword ptr [rip + 0x11223344], 1; je A; mov dword ptr [rip + 0x22334455], 0x3D088889; jmp B; A: mov dword ptr [rip + 0x33445566], 0x3C888889; B: jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -280,7 +280,7 @@ void OnInitializeHook()
 
 			//Controlled character turning speed (a bit broken above 90 fps) [ref: 0x00006734 to 0x00006744]
 			match = pattern("F3 0F 59 49 40 F3 0F 59 CA F3 0F 59 51 34 F3 0F 59 0D 1F C4 3A 00").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm1, dword ptr [rcx+40h]; movss xmm2, dword ptr [rcx+34h]", "mulss", "xmm1", "xmm7", "edx", 15.0f / framerate, "", &encode, &size))
+			if (!ModifyXMMRegisterJump("movss xmm1, dword ptr [rcx + 0x40]; movss xmm2, dword ptr [rcx + 0x34]", "mulss", "xmm1", "xmm7", "edx", 15.0f / framerate, "", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -367,22 +367,11 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 
-			//[ref: 0x002A13A8]
-			match = pattern("05 93 57 2C 00 F3 41 0F 10 84 06 B8 00 00 00 0F").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm0, dword ptr [r14 + rax + 0B8h]", "mulss", "xmm0", "xmm7", "edx", framerate / 30.0f, "", &encode, &size))
-			{
-				space = trampoline->RawSpace(size);
-				memcpy(space, encode, size);
-				ks_free_fnc(encode);
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0xF)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
-			}
-
 			//Gameplay fixes #1 (i.e guards falling into the ground below when dropping from the ship at the beginning of the game) [ref: 0x0013D75C, different approach used]
 			match = pattern("F3 0F 58 05 3C DE 20 00 F3 0F 11 04 88 0F 28 C2").count(1);
 			auto lastincrement = trampoline->Pointer<float>();
 			*lastincrement = -1.0;
-			if (!ks_asm_fnc(ks, "movss dword ptr[rip + 11223344h], xmm0; movss dword ptr[rax + rcx * 4], xmm0; jmp 0x1000000", 0, &encode, &size, &count)) //Register the last incremented variable
+			if (!ks_asm_fnc(ks, "movss dword ptr [rip + 0x11223344], xmm0; movss dword ptr [rax + rcx * 4], xmm0; jmp 0x1000000", 0, &encode, &size, &count)) //Register the last incremented variable
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -392,7 +381,7 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
 			match = pattern("28 C8 F3 0F 11 4D 18 45 84 C0 0F 84 C9 00 00 00").count(1);
-			if (!ModifyXMMRegisterJump("movss DWORD PTR [rbp+0x18], xmm1; cmp dword ptr [rdi], 4; jz B; cmp r11d, 0x6d; jne B; comiss xmm1, dword ptr [rip + 0x00112233]; jne B; mov eax, 0x40A00000; movd xmm0, eax; comiss xmm3, xmm0; jbe B;", "mulss", "xmm3", "xmm0", "eax", framerate / 30.0f, "cvtss2si eax, xmm3; cvtsi2ss xmm3, eax; B: movss DWORD PTR [rbp + 0x30], xmm3;", &encode, &size)) //If the switch will go to case 109 (cmp r11d, 0x6d), and the value in xmm1 has been retrieved via baseaddress+0x372150() (it didn't follow the branch of cmp dword ptr [rdi], 4), then check if it's the last incremented value. If that's the case then it means that gets compared to xmm3 for triggering frame counter based events, so adjust (and truncate) xmm3 accordingly. Check for <= 5.0 to avoid softlocks.
+			if (!ModifyXMMRegisterJump("movss dword ptr [rbp + 0x18], xmm1; cmp dword ptr [rdi], 4; jz B; cmp r11d, 0x6d; jne B; comiss xmm1, dword ptr [rip + 0x00112233]; jne B; mov eax, 0x40A00000; movd xmm0, eax; comiss xmm3, xmm0; jbe B;", "mulss", "xmm3", "xmm0", "eax", framerate / 30.0f, "cvtss2si eax, xmm3; cvtsi2ss xmm3, eax; B: movss dword ptr [rbp + 0x30], xmm3;", &encode, &size)) //If the switch will go to case 109 (cmp r11d, 0x6d), and the value in xmm1 has been retrieved via baseaddress + 0x372150() (it didn't follow the branch of cmp dword ptr [rdi], 4), then check if it's the last incremented value. If that's the case then it means that gets compared to xmm3 for triggering frame counter based events, so adjust (and truncate) xmm3 accordingly. Check for <= 5.0 to avoid softlocks.
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -461,7 +450,7 @@ void OnInitializeHook()
 
 			//[ref: 0x002A1838]
 			match = pattern("E8 3B C3 FF FF F3 41 0F 58 84 3E B8 00 00 00 F3").count(1);
-			if (!ModifyXMMRegisterJump("addss xmm0, dword ptr [r14+rdi+0B8h]", "mulss", "xmm0", "xmm7", "r10d", 30.0f / framerate, "", &encode, &size))
+			if (!ModifyXMMRegisterJump("addss xmm0, dword ptr [r14 + rdi + 0xB8]", "mulss", "xmm0", "xmm7", "r10d", 30.0f / framerate, "", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -483,7 +472,7 @@ void OnInitializeHook()
 
 			//Moogle dialog box
 			match = pattern("39 83 5C 01 00 00 40 0F B6 FF B9 01 00 00 00 0F").count(1);
-			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", framerate / 30.0f, "cvtss2si eax, xmm11; cmp [rbx+15Ch], eax", &encode, &size))
+			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", framerate / 30.0f, "cvtss2si eax, xmm11; cmp [rbx + 0x15C], eax", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -494,7 +483,7 @@ void OnInitializeHook()
 
 			//Delay before next dialog when characters speak via the COM (i.e Kurasame at the beginning, with subtitles shown on the left side) Note: if you liked the previous speeded up behaviour you can select the fast dialog speed inside the options.
 			match = pattern("0F 4F C1 89 45 0C 48 8B 5C 24 58 48 8B 6C 24 68").count(1);
-			if (!ModifyXMMRegisterJump("cmovg eax, ecx; cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", framerate / 30.0f, "cvtss2si eax, xmm11; mov [rbp+0Ch], eax", &encode, &size))
+			if (!ModifyXMMRegisterJump("cmovg eax, ecx; cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", framerate / 30.0f, "cvtss2si eax, xmm11; mov [rbp + 0xC], eax", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -516,7 +505,7 @@ void OnInitializeHook()
 			}
 			//In game timer when loaded from save file (for consistency between framerates, otherwise the division above while timed correctly, would have been offsetted, basically (![X]*speed!+[Y*2]*speed)/speed so that whatever increased speed is there, it's cancelled out (this is the between !! part))
 			match = pattern("0F 85 87 00 00 00 B9 BA 00 00 00 0F 1F 44 00 00 0F 28 00 4D 8D 89 80 00 00 00 48 8D 80 80 00 00 00 41 0F 29 41 80").count(1); //this pattern sucks
-			if (!ModifyXMMRegisterJump("movaps xmmword ptr [r9-80h], xmm0; mov r15, 0x1122334455667788; cmp r9, r15; jnz A; cvtsi2ss xmm11, dword ptr [r9-78h];", "mulss", "xmm11", "xmm10", "r15d", framerate / 15.0f, "cvtss2si r15d, xmm11; mov dword ptr [r9-78h], r15d; A: nop", &encode, &size)) //The game uses a weird way of loading the save file, it copies multiple values via xmmword even though they are dwords, check if baseaddress + 0x6BEE88 had been written (via 256 bit write from 0x6BEE80) and modify it
+			if (!ModifyXMMRegisterJump("movaps xmmword ptr [r9 - 0x80], xmm0; mov r15, 0x1122334455667788; cmp r9, r15; jnz A; cvtsi2ss xmm11, dword ptr [r9 - 0x78];", "mulss", "xmm11", "xmm10", "r15d", framerate / 15.0f, "cvtss2si r15d, xmm11; mov dword ptr [r9 - 0x78], r15d; A: nop", &encode, &size)) //The game uses a weird way of loading the save file, it copies multiple values via xmmword even though they are dwords, check if baseaddress + 0x6BEE88 had been written (via 256 bit write from 0x6BEE80) and modify it
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -539,7 +528,7 @@ void OnInitializeHook()
 			}
 			//Game timer when copied into a buffer for writing it into the various save data slots
 			match = pattern("7C 5E 4C 00 89 87 64 07 00 00 0F B6 05 67 BC 4C").count(1);
-			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", 15.0f / framerate, "cvtss2si eax, xmm11; and eax, 0xFFFFFFFE; mov [rdi+764h], eax", &encode, &size)) //The AND is just a failsafe, maybe not strictly necessary, but since the frame counter gets incremented by 2 every frame, having an odd number of them may cause problems.
+			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, eax;", "mulss", "xmm11", "xmm10", "eax", 15.0f / framerate, "cvtss2si eax, xmm11; and eax, 0xFFFFFFFE; mov [rdi + 0x764], eax", &encode, &size)) //The AND is just a failsafe, maybe not strictly necessary, but since the frame counter gets incremented by 2 every frame, having an odd number of them may cause problems.
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -576,7 +565,7 @@ void OnInitializeHook()
 			{
 				transparency_frames[i] = static_cast<std::byte>(TransparencyLinearInterpolation(static_cast<float>(i) / (transparency_frames_count - 1)));
 			}
-			if (!ks_asm_fnc(ks, "mov eax, dword ptr [rip + 0x22334455]; mov r9d, 0x11223344; xor edx, edx; div r9d; lea rax, [rip + 0x55667788]; add rax, rdx; mov dl, byte ptr [rax]; mov r9d, edx; shl r9d, 0x18; mov edx,DWORD PTR [rsp+0x120]; jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks, "mov eax, dword ptr [rip + 0x22334455]; mov r9d, 0x11223344; xor edx, edx; div r9d; lea rax, [rip + 0x55667788]; add rax, rdx; mov dl, byte ptr [rax]; mov r9d, edx; shl r9d, 0x18; mov edx, dword ptr [rsp + 0x120]; jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -631,7 +620,7 @@ void OnInitializeHook()
 
 			//Projectile speed general fix (This is the holy grail of fixes, but it's also one of the worst manual x86 code ever written.) Note: the first parameter passed to the function in which this is injected (sub_140287C20) gets copied to rdi. Rdi + 0x54, 58 and 5C contains the coordinate offset for the next frame, which I'd need to adjust according to the framerate, however since the functions that call this one are many and different between each other, the compiler decided to sometimes have temporary registers that holds those values (3 of the registers in the xmm6-12 range) and sometimes reload them from memory. This code should handle every possible combination of those, but it's really ugly. The only other solution would be to manually patch each function before the call, but that would require a lot of redirections for doing basically the same things.
 			match = pattern("7A B0 01 4C 8D 9C 24 C0 00 00 00 49 8B 5B 38 49 8B 73 40 49 8B 7B 48 41 0F 28 73 F0 41 0F 28 7B").count(1);
-			if (!LoadXMMRegisterJump("movaps xmm6, xmmword ptr [r11-10h]; movaps xmm7, xmmword ptr [r11-20h]; movaps xmm8, xmmword ptr [r11-30h];", "xmm2", "r9d", 30.0f / framerate, "comiss xmm6, dword ptr [rdi+54h]; je A; comiss xmm6, dword ptr [rdi+58h]; je A; comiss xmm6, dword ptr [rdi+5Ch]; jne B; A: mulss xmm6, xmm2; B: comiss xmm7, dword ptr [rdi+54h]; je C; comiss xmm7, dword ptr [rdi+58h]; je C; comiss xmm7, dword ptr [rdi+5Ch]; jne D; C: mulss xmm7, xmm2; D: comiss xmm8, dword ptr [rdi+54h]; je E; comiss xmm8, dword ptr [rdi+58h]; je E; comiss xmm8, dword ptr [rdi+5Ch]; jne F; E: mulss xmm8, xmm2; F: comiss xmm9, dword ptr [rdi+54h]; je G; comiss xmm9, dword ptr [rdi+58h]; je G; comiss xmm9, dword ptr [rdi+5Ch]; jne H; G: mulss xmm9, xmm2; H: comiss xmm10, dword ptr [rdi+54h]; je I; comiss xmm10, dword ptr [rdi+58h]; je I; comiss xmm10, dword ptr [rdi+5Ch]; jne J; I: mulss xmm10, xmm2; J: comiss xmm11, dword ptr [rdi+54h]; je K; comiss xmm11, dword ptr [rdi+58h]; je K; comiss xmm11, dword ptr [rdi+5Ch]; jne L; K: mulss xmm11, xmm2; L: comiss xmm12, dword ptr [rdi+54h]; je M; comiss xmm12, dword ptr [rdi+58h]; je M; comiss xmm12, dword ptr [rdi+5Ch]; jne N; M: mulss xmm12, xmm2; N: movss xmm3, dword ptr [rdi+54h]; mulss xmm3, xmm2; movss dword ptr [rdi+54h], xmm3; movss xmm3, dword ptr [rdi+58h]; mulss xmm3, xmm2; movss dword ptr [rdi+58h], xmm3; movss xmm3, dword ptr [rdi+5Ch]; mulss xmm3, xmm2; movss dword ptr [rdi+5Ch], xmm3; mov rdi, [r11+48h];", &encode, &size))
+			if (!LoadXMMRegisterJump("movaps xmm6, xmmword ptr [r11 - 0x10]; movaps xmm7, xmmword ptr [r11 - 0x20]; movaps xmm8, xmmword ptr [r11 - 0x30];", "xmm2", "r9d", 30.0f / framerate, "comiss xmm6, dword ptr [rdi + 0x54]; je A; comiss xmm6, dword ptr [rdi + 0x58]; je A; comiss xmm6, dword ptr [rdi + 0x5C]; jne B; A: mulss xmm6, xmm2; B: comiss xmm7, dword ptr [rdi + 0x54]; je C; comiss xmm7, dword ptr [rdi + 0x58]; je C; comiss xmm7, dword ptr [rdi + 0x5C]; jne D; C: mulss xmm7, xmm2; D: comiss xmm8, dword ptr [rdi + 0x54]; je E; comiss xmm8, dword ptr [rdi + 0x58]; je E; comiss xmm8, dword ptr [rdi + 0x5C]; jne F; E: mulss xmm8, xmm2; F: comiss xmm9, dword ptr [rdi + 0x54]; je G; comiss xmm9, dword ptr [rdi + 0x58]; je G; comiss xmm9, dword ptr [rdi + 0x5C]; jne H; G: mulss xmm9, xmm2; H: comiss xmm10, dword ptr [rdi + 0x54]; je I; comiss xmm10, dword ptr [rdi + 0x58]; je I; comiss xmm10, dword ptr [rdi + 0x5C]; jne J; I: mulss xmm10, xmm2; J: comiss xmm11, dword ptr [rdi + 0x54]; je K; comiss xmm11, dword ptr [rdi + 0x58]; je K; comiss xmm11, dword ptr [rdi + 0x5C]; jne L; K: mulss xmm11, xmm2; L: comiss xmm12, dword ptr [rdi + 0x54]; je M; comiss xmm12, dword ptr [rdi + 0x58]; je M; comiss xmm12, dword ptr [rdi + 0x5C]; jne N; M: mulss xmm12, xmm2; N: movss xmm3, dword ptr [rdi + 0x54]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x54], xmm3; movss xmm3, dword ptr [rdi + 0x58]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x58], xmm3; movss xmm3, dword ptr [rdi + 0x5C]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x5C], xmm3; mov rdi, [r11 + 0x48];", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -643,8 +632,13 @@ void OnInitializeHook()
 			//New setup for frame counter based fixes
 			auto interleavedincrement = trampoline->Pointer<float>();
 			auto propagatecounters = trampoline->Pointer<uint8_t>();
+			auto reset_list = trampoline->Pointer<uint8_t>(); //Used as an interleaved cycle, to avoid desync
+			*reset_list = 1;
+			auto sub_14025FD20_rbx_list_count = trampoline->Pointer<uint8_t>();
+			*sub_14025FD20_rbx_list_count = 10;
+			auto sub_14025FD20_rbx_list = reinterpret_cast<uint64_t*>(trampoline->RawSpace(*sub_14025FD20_rbx_list_count * sizeof(uint64_t)));
 			match = pattern("48 89 3B C6 43 08 01 48 8B 5C 24 40 48 83 C4 20").count(1);
-			if (!ModifyXMMRegisterJump("movss xmm2, dword ptr [rip + 0x11223344];", "addss", "xmm2", "xmm1", "ebx", 30.0f / framerate, "mov ebx, 0x3F800000; movd xmm1, ebx; comiss xmm2, xmm1; mov byte ptr [rip + 0x22334455], 0; jb A; subss xmm2, xmm1; mov byte ptr [rip + 0x33445566], 1; A: movss dword ptr [rip + 0x44556677], xmm2; mov rbx, qword ptr [rsp + 0x40]", &encode, &size)) //Use a slightly convoluted way to decide if this rendered frame will update counters (done immediately after renderer sleep)
+			if (!ModifyXMMRegisterJump("movss xmm2, dword ptr [rip + 0x11223344];", "addss", "xmm2", "xmm1", "ebx", 30.0f / framerate, "mov ebx, 0x3F800000; movd xmm1, ebx; comiss xmm2, xmm1; mov byte ptr [rip + 0x22334455], 0; jb A; subss xmm2, xmm1; mov byte ptr [rip + 0x33445566], 1; neg byte ptr [rip + 0x22331144]; js A; lea rax, [rip + 0x11332244]; xor rbx, rbx; B: mov qword ptr [rax + rbx * 8], 0; inc rbx; cmp bl, byte ptr [rip + 0x22443311]; jl B; A: movss dword ptr [rip + 0x44556677], xmm2; mov rbx, qword ptr [rsp + 0x40]", &encode, &size)) //Use a slightly convoluted way to decide if this rendered frame will update counters (done immediately after renderer sleep)
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -652,9 +646,25 @@ void OnInitializeHook()
 				WriteOffsetValue(space + 4, interleavedincrement); //Replaces 11223344
 				WriteOffsetValue<1>(space + 35, propagatecounters); //Replaces 22334455
 				WriteOffsetValue<1>(space + 48, propagatecounters); //Replaces 33445566
-				WriteOffsetValue(space + 57, interleavedincrement); //Replaces 44556677
+				WriteOffsetValue(space + 55, reset_list);
+				WriteOffsetValue(space + 64, sub_14025FD20_rbx_list);
+				WriteOffsetValue(space + 84, sub_14025FD20_rbx_list_count);
+				WriteOffsetValue(space + 94, interleavedincrement); //Replaces 44556677
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+
+			//$ Fire projectile damage trigger to rts elements only once
+			match = pattern("40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 18 FE FF FF 48 81 EC").count(1);
+			if (!ks_asm_fnc(ks, "lea rax, [rip + 0x11223344]; xor r10, r10; B: cmp qword ptr [rax + r10 * 8], 0; je A; cmp rbx, qword ptr [rax + r10 * 8]; je C; inc r10; jmp B; C: mov eax, 1; ret; A:mov byte ptr [rip + 0x11223344], 1; mov qword ptr [rax + r10 * 8], rbx; push rbp; push rbx; push rsi; push rdi; jmp 0x1000000", 0, &encode, &size, &count)) //Register the last incremented variable
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + 3, sub_14025FD20_rbx_list);
+				WriteOffsetValue<1>(space + 36, reset_list);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x5)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
 
 			//RTS missions bases regen speed
@@ -670,7 +680,7 @@ void OnInitializeHook()
 			}
 			//RTS missions troop respawn time
 			match = pattern("00 00 66 85 C0 7E 0A 66 FF C8 66 89 86 BC 01 00").count(1);
-			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec ax; A:mov [rsi+1BCh], ax; jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec ax; A:mov [rsi + 0x1BC], ax; jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -692,7 +702,7 @@ void OnInitializeHook()
 			}
 			//RTS Troop reshooting time
 			match = pattern("7E 22 66 FF C9 66 89 8B D8 01 00 00 0F BF C1 74").count(1);
-			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec cx; A:mov [rbx+1D8h], cx; jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec cx; A:mov [rbx + 0x1D8], cx; jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -702,18 +712,18 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
 			}
 			match = pattern("66 FF C8 66 89 83 D8 01 00 00 98 0F 85 BD 03 00").count(1);
-			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec ax; A:mov [rbx+1D8h], ax; jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; dec ax; A:mov [rbx + 0x1D8], ax; jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
 				WriteOffsetValue<1>(space + 2, propagatecounters); //Replaces 11223344
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0), space, PATCH_JUMP);
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
 			//RTS Projectile duration
 			match = pattern("F0 66 89 B3 BC 01 00 00 48 8B 87 A0 01 00 00 48").count(1);
-			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, esi;", "mulss", "xmm11", "xmm10", "esi", framerate / 30.0f, "cvtss2si esi, xmm11; mov [rbx+1BCh], si", &encode, &size))
+			if (!ModifyXMMRegisterJump("cvtsi2ss xmm11, esi;", "mulss", "xmm11", "xmm10", "esi", framerate / 30.0f, "cvtss2si esi, xmm11; mov [rbx + 0x1BC], si", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -730,6 +740,17 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xE)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
 			}
+			//$ Fire projectile damage trigger to player/ai enemies only once (fixes Deuce's sphere from being incredibly OP, between other things)
+			match = pattern("48 85 D2 0F 84 B6 02 00 00 56 57 41 57 48 81 EC").count(1);
+			if (!ks_asm_fnc(ks, "test rdx, rdx; jnz A; ret; A:cmp byte ptr [rip + 0x11223344], 1; je B; ret; B:jmp 0x10000000", 0, &encode, &size, &count))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue<1>(space + 8, propagatecounters); //Replaces 11223344
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
+			}
 
 			//General frame counter based actions #1 (bullets range (Ace's cards, rocket launcher guy), charged attacks, Nine's jump etc.)
 			pattern("66 FF ? 86 00 00 00").for_each_result([framerate, trampoline, propagatecounters] (auto found)
@@ -737,7 +758,7 @@ void OnInitializeHook()
 				unsigned char* encode;
 				size_t size;
 				size_t count;
-				if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; inc word ptr [rdi+86h]; A: jmp 0x10000000", 0, &encode, &size, &count))
+				if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; inc word ptr [rdi + 0x86]; A: jmp 0x10000000", 0, &encode, &size, &count))
 				{
 					auto space = trampoline->RawSpace(size);
 					memcpy(space, encode, size);
@@ -749,7 +770,7 @@ void OnInitializeHook()
 				}
 			});
 			//#2, with inc and mov instead of just inc for whatever reason
-			pattern("66 FF ? 66 89 ? 86 00 00 00").for_each_result([framerate, trampoline, propagatecounters] (auto found) // movzx X, word ptr [Y + 88h] : X = general purpose 32 bit register, Y = general purpose 64 bit register
+			pattern("66 FF ? 66 89 ? 86 00 00 00").for_each_result([framerate, trampoline, propagatecounters] (auto found) // movzx X, word ptr [Y + 0x88] : X = general purpose 32 bit register, Y = general purpose 64 bit register
 			{
 				auto inc_reg_byte = *found.get<uint8_t>(2);
 				auto mov_reg_byte = *found.get<uint8_t>(5);
@@ -763,7 +784,7 @@ void OnInitializeHook()
 							unsigned char* encode;
 							size_t size;
 							size_t count;
-							if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; inc ax; A: mov [rdi+86h], ax; jmp 0x10000000", 0, &encode, &size, &count))
+							if (!ks_asm_fnc(ks, "cmp byte ptr [rip + 0x11223344], 1; jne A; inc ax; A: mov [rdi + 0x86], ax; jmp 0x10000000", 0, &encode, &size, &count))
 							{
 								auto space = trampoline->RawSpace(size);
 								memcpy(space, encode, size);
@@ -814,7 +835,7 @@ void OnInitializeHook()
 			}
 			//Queen's Divine Judgement rotation speed
 			match = pattern("F3 0F 10 05 2C 65 2D 00 F3 0F 58 87 B8 00 00 00").count(1);
-			if (!ModifyXMMRegisterJump("", "mulss", "xmm1", "xmm10", "r11d", 30.0f / framerate, "mulss xmm0, xmm10; addss xmm0, dword ptr [rdi+0B8h];", &encode, &size))
+			if (!ModifyXMMRegisterJump("", "mulss", "xmm1", "xmm10", "r11d", 30.0f / framerate, "mulss xmm0, xmm10; addss xmm0, dword ptr [rdi + 0xB8];", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -823,9 +844,9 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
 
-			//Nine's jump travel distance
+			//Nine's jump (and high jump) travel distance (take into account accumulating floating point errors when adjusting the values)
 			match = pattern("87 FC 00 00 00 F3 0F 58 53 08 F3 0F 58 4B 04 F3 0F 58 03 F3 0F 11 03 F3").count(1);
-			if (!LoadXMMRegisterJump("", "xmm10", "r11d", 30.0f / framerate, "mulss xmm2, xmm10; mulss xmm1, xmm10; mulss xmm0, xmm10; addss xmm2, dword ptr [rbx+8]; addss xmm1, dword ptr [rbx+4]; addss xmm0, dword ptr [rbx]", &encode, &size))
+			if (!LoadXMMRegisterJump("", "xmm10", "r11d", 20.0f / (framerate - 10.0f), "mulss xmm2, xmm10; mulss xmm1, xmm10; mulss xmm0, xmm10; addss xmm2, dword ptr [rbx + 8]; addss xmm1, dword ptr [rbx + 4]; addss xmm0, dword ptr [rbx]", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -833,16 +854,46 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x13)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
+			match = pattern("10 03 F3 0F 58 87 FC 00 00 00 F3 0F 58 53 08 F3").count(1);
+			if (!LoadXMMRegisterJump("movss xmm0, dword ptr [rdi + 0xFC];", "xmm10", "r11d", 20.0f / (framerate - 10.0f), "mulss xmm2, xmm10; mulss xmm1, xmm10; mulss xmm0, xmm10; addss xmm2, dword ptr [rbx + 8]; addss xmm1, dword ptr [rbx + 4]; addss xmm0, dword ptr [rbx]", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x14)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
+			}
 
 			//Rocket Launcher guy projectile speed (instead of being set every time the function is called, it's only done once, so it needs to be reset for the next cycle)
 			match = pattern("00 00 48 8B 8D 10 01 00 00 48 33 CC E8 4F 50 E8").count(1);
-			if (!LoadXMMRegisterJump("mov rcx, qword ptr [rbp + 0x110];", "xmm2", "edx", framerate / 30.0f, "movss xmm3, dword ptr [rdi+54h]; mulss xmm3, xmm2; movss dword ptr [rdi+54h], xmm3; movss xmm3, dword ptr [rdi+58h]; mulss xmm3, xmm2; movss dword ptr [rdi+58h], xmm3; movss xmm3, dword ptr [rdi+5Ch]; mulss xmm3, xmm2; movss dword ptr [rdi+5Ch], xmm3;", &encode, &size))
+			if (!LoadXMMRegisterJump("mov rcx, qword ptr [rbp + 0x110];", "xmm2", "edx", framerate / 30.0f, "movss xmm3, dword ptr [rdi + 0x54]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x54], xmm3; movss xmm3, dword ptr [rdi + 0x58]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x58], xmm3; movss xmm3, dword ptr [rdi + 0x5C]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x5C], xmm3;", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
 				ks_free_fnc(encode);
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
+			}
+
+			//Fire RF (and potentially similar attacks) bullet elapsed range [ref: 0x002A13A8]
+			match = pattern("05 93 57 2C 00 F3 41 0F 10 84 06 B8 00 00 00 0F").count(1);
+			if (!ModifyXMMRegisterJump("movss xmm0, dword ptr [r14 + rax + 0xB8]", "mulss", "xmm0", "xmm7", "edx", 30.0f / framerate, "", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xF)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
+			}
+			//Fire RF (and potentially similar attacks) bullet speed
+			match = pattern("0F 10 43 10 F3 0F 58 53 08 F3 0F 58 4B 04 F3 0F 58 03 F3 0F 11 03 F3 0F").count(1);
+			if (!LoadXMMRegisterJump("", "xmm13", "eax", 30.0f / framerate, "mulss xmm2, xmm13; mulss xmm1, xmm13; mulss xmm0, xmm13; addss xmm2, dword ptr [rbx + 8]; addss xmm1, dword ptr [rbx + 4]; addss xmm0, dword ptr [rbx];", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x12)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
 
 			//Deuce flute energy sphere horizontal orbit
@@ -855,7 +906,7 @@ void OnInitializeHook()
 				ks_free_fnc(encode);
 				WriteOffsetValue(space + 15, baseaddress + 0x57FBE8);
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0), space, PATCH_JUMP);
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
 			//Deuce flute energy sphere vertical orbit
 			match = pattern("04 01 00 00 F3 0F 58 05 34 5B 2C 00 0F 2F C1 F3").count(1);
@@ -878,7 +929,7 @@ void OnInitializeHook()
 				bouncing_heigths[i] = BouncingPatternParabola(*bouncing_heigths_count - 1, i, 45.125f);
 			}
 			match = pattern("0F 2F F0 F3 0F 11 83 04 01 00 00 76 0B 48 C7 83").count(1);
-			if (!ks_asm_fnc(ks, "lea rax, [rip + 0x55667788]; xor r10,r10; mov r10b, byte ptr [rip + 0x22334455]; movss xmm0, dword ptr [rax+4*r10]; movss dword ptr[rbx + 0x104], xmm0; inc r10d; cmp byte ptr [rip + 0x77665544], r10b; jg A; xor r10, r10; A: mov byte ptr [rip + 0x22334455], r10b; comiss xmm14, xmm0; jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks, "lea rax, [rip + 0x55667788]; xor r10, r10; mov r10b, byte ptr [rip + 0x22334455]; movss xmm0, dword ptr [rax + r10 * 4]; movss dword ptr [rbx + 0x104], xmm0; inc r10d; cmp byte ptr [rip + 0x77665544], r10b; jg A; xor r10, r10; A: mov byte ptr [rip + 0x22334455], r10b; comiss xmm14, xmm0; jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -890,9 +941,9 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
 			}
-			//Deuce flute energy sphere when following targets
+			//Deuce flute energy sphere when following targets (speed and amplitude)
 			match = pattern("C8 80 E1 01 F3 44 0F 11 43 54 F3 44 0F 11 53 58").count(1);
-			if (!LoadXMMRegisterJump("mulss xmm9, xmm7; mulss xmm9, xmm1;", "xmm4", "r10d", 30.0f / framerate, "mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx+54h], xmm8; movss dword ptr [rbx+58h], xmm10; movss dword ptr [rbx+5Ch], xmm9", &encode, &size))
+			if (!LoadXMMRegisterJump("mulss xmm9, xmm7; mulss xmm9, xmm1;", "xmm4", "r10d", 30.0f / framerate, "mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx + 0x54], xmm8; movss dword ptr [rbx + 0x58], xmm10; movss dword ptr [rbx + 0x5C], xmm9", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -900,9 +951,18 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x20)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
+			match = pattern("15 73 61 2C 00 48 8D 55 B8 48 8B CB 0F 28 DA E8").count(1);
+			if (!ModifyXMMRegisterJump("", "mulss", "xmm2", "xmm3", "edx", 30.0f / framerate, "lea rdx, [rbp - 0x48]; mov rcx, rbx", &encode, &size))
+			{
+				space = trampoline->RawSpace(size);
+				memcpy(space, encode, size);
+				ks_free_fnc(encode);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
+			}
 			//Deuce flute energy sphere when going back to Deuce
 			match = pattern("0F B6 0D C0 ED 39 00 F3 44 0F 11 43 54 F3 44 0F").count(1);
-			if (!LoadXMMRegisterJump("lea rdx, [rbx + 44h]; mov eax, 20h; and cl, 1;", "xmm4", "r10d", 30.0f / framerate, "mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx+54h], xmm8; movss dword ptr [rbx+58h], xmm10; movss dword ptr [rbx+5Ch], xmm9", &encode, &size))
+			if (!LoadXMMRegisterJump("lea rdx, [rbx + 0x44]; mov eax, 20h; and cl, 1;", "xmm4", "r10d", 30.0f / framerate, "mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx + 0x54], xmm8; movss dword ptr [rbx + 0x58], xmm10; movss dword ptr [rbx + 0x5C], xmm9", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -924,7 +984,7 @@ void OnInitializeHook()
 
 			//RTS turret animation timings
 			match = pattern("7E 06 41 83 EE 02 EB 06 41 BE").count(1); //Delay before rising
-			if (!ks_asm_fnc(ks, "cmp word ptr [rdi + 1B0h], 0; jle A; dec word ptr [rdi + 1B0h]; jmp B; A:sub r14d, 2; B: jmp 0x10000000", 0, &encode, &size, &count))
+			if (!ks_asm_fnc(ks, "cmp word ptr [rdi + 0x1B0], 0; jle A; dec word ptr [rdi + 0x1B0]; jmp B; A:sub r14d, 2; B: jmp 0x10000000", 0, &encode, &size, &count))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -942,7 +1002,7 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
 			}
 			match = pattern("0F 5B C0 F3 0F 59 05 E9 87 12 00 F3 0F 5E 05 49").count(1); //Adjust tilt when falling (and set the delay)
-			if (!ModifyXMMRegisterJump("mov word ptr [rsi + 1B0h], 0x1122", "mulss", "xmm0", "xmm15", "eax", 3.14159f * (30.0f / framerate), "", &encode, &size))
+			if (!ModifyXMMRegisterJump("mov word ptr [rsi + 0x1B0], 0x1122", "mulss", "xmm0", "xmm15", "eax", 3.14159f * (30.0f / framerate), "", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
@@ -961,7 +1021,7 @@ void OnInitializeHook()
 			*keepcutscenefov = GetPrivateProfileIntW(L"FOV", L"KeepCutsceneFOV", 1, wcModulePath);
 
 			match = pattern("0F 59 35 45 41 1D 00 44 0F 29 50 A8 44 0F 29 58").count(1);
-			if (!ModifyXMMRegisterJump("movaps xmmword ptr [rax-58h], xmm10; cmp byte ptr [rip + 0x11223344], 1; jnz A; cmp dword ptr [rip + 0x55667788], 1; jz B; A: nop", "mulss", "xmm6", "xmm0", "r14d", fovoverride, "B: nop", &encode, &size))
+			if (!ModifyXMMRegisterJump("movaps xmmword ptr [rax - 0x58], xmm10; cmp byte ptr [rip + 0x11223344], 1; jnz A; cmp dword ptr [rip + 0x55667788], 1; jz B; A: nop", "mulss", "xmm6", "xmm0", "r14d", fovoverride, "B: nop", &encode, &size))
 			{
 				space = trampoline->RawSpace(size);
 				memcpy(space, encode, size);
