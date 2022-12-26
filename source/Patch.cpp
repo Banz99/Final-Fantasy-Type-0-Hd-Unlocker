@@ -95,8 +95,13 @@ int ParametricASMJump(const char* asmstring, std::byte** spaceptr, size_t* size,
 		{
 			if (!std::regex_search(s, sm, ripoffset))
 			{
-				if (ks_asm_fnc(ks, s.c_str(), 0, &encode, size, &count))
+				if (ks_asm_fnc(ks, s.c_str(), 0, &encode, size, &count)) {
+					#ifdef DEBUG
+					DebugBreak();
+					const char* instruction = s.c_str();
+					#endif
 					return 1;
+				}
 				relativeoffset += *size;
 				finaloutput += s + ";";
 				ks_free_fnc(encode);
@@ -105,8 +110,8 @@ int ParametricASMJump(const char* asmstring, std::byte** spaceptr, size_t* size,
 			{
 				if (ks_asm_fnc(ks, std::regex_replace(s, ripoffset, "0x11223344").c_str(), 0, &encode, size, &count)) {
 					#ifdef DEBUG
-						const char* instruction = std::regex_replace(s, ripoffset, "0x11223344").c_str()
-						DebugBreak();
+					DebugBreak();
+					const char* instruction = std::regex_replace(s, ripoffset, "0x11223344").c_str();
 					#endif
 					return 1;
 				}
@@ -120,8 +125,8 @@ int ParametricASMJump(const char* asmstring, std::byte** spaceptr, size_t* size,
 
 	if (ks_asm_fnc(ks, (finaloutput + "jmp 0x1000000;").c_str(), 0, &encode, size, &count)) {
 		#ifdef DEBUG
-			const char* full_asm_out = finaloutput.c_str();
-			DebugBreak();
+		DebugBreak();
+		const char* full_asm_out = finaloutput.c_str();
 		#endif
 		return 1;
 	}
@@ -190,12 +195,12 @@ void OnInitializeHook()
 
 		if (aspect_ratio != 16.0f / 9.0f) //See below
 		{
+
 			auto geometry_aspect_ratio = pattern("00 C7 87 74 08 00 00 39 8E E3 3F C7 87 50 06 00").count(1); //This is not a FOV slider, it just rescales the geometry so that it isn't stretched in the viewport, like the HUD
 			if (geometry_aspect_ratio.size() == 1)
 			{
 				Patch<float>(geometry_aspect_ratio.get_first<void>(0x7), aspect_ratio);
 			}
-
 			auto res_mismatch_fix = pattern("00 00 00 4C 8D 05 C6 B5 5E 00 48 8D 15 AF B5 5E").count(1); //This fix seems to have the side effect of scaling the HUD via nearest neighbor, which isn't really ideal and shouldn't be engaged when the aspect ratio is already 16:9, hence the check above
 			if (res_mismatch_fix.size() == 1)
 			{
@@ -335,7 +340,7 @@ void OnInitializeHook()
 			param_floats[0] = 30.0f / framerate;
 			pointers[0] = baseaddress + 0x658F70;
 			pointers[1] = baseaddress + 0x6D1CEC;
-			if (!ParametricASMJump("mulss xmm1, dword ptr [rsp + 0x20]; cmp dword ptr [rip + ?0], 1; jnz A; cmp dword ptr [rip + ?1], 0; jnz B; A: movss xmm7, %0; mulss xmm1, xmm7; mulss xmm6, xmm7; B: nop", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("mulss xmm1, dword ptr [rsp + 0x20]; cmp dword ptr [rip + ?0], 1; jnz A; cmp dword ptr [rip + ?1], 0; jnz B; A: mulss xmm1, %0; mulss xmm6, %0; B: nop", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
@@ -387,19 +392,6 @@ void OnInitializeHook()
 				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
 			}
 
-			//Various timings, used mainly in cutscenes but not exclusively, with a specific fix for Akademia teleporters slowdown (why did you do this, Square Enix...) [ref: 0x00127D90]
-			match = pattern("2F C8 76 04 C6 41 2C 01 F3 0F 5C 0D 93 34 22 00").count(1);
-			constants[0] = baseaddress + 0x37F439;
-			constants[1] = baseaddress;
-			param_floats[0] = 30.0f / framerate;
-			param_floats[1] = 1.0f;
-			pointers[0] = baseaddress + 0x658F70;
-			if (!ParametricASMJump("mov r13, $0; cmp r13, qword ptr [rsp]; jne A; mov r13, $1; cmp r11, r13; jne A; cmp dword ptr [rip + ?0], 0; je B; A: subss xmm1, %0; jmp C; B: subss xmm1, %1; C: nop", &space, &size, constants, pointers, param_floats))
-			{
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
-			}
-
 			//Part of the HUD [ref: 0x002491E4]
 			match = pattern("0F 5B C0 F3 0F 5E C8 F3 0F 58 CA 41 0F 2F CF").count(1);
 			param_floats[0] = 30.0f / framerate;
@@ -416,35 +408,6 @@ void OnInitializeHook()
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
-			}
-
-			//Gameplay fixes #1 (i.e guards falling into the ground below when dropping from the ship at the beginning of the game) [ref: 0x0013D75C, different approach used]
-			match = pattern("F3 0F 58 05 3C DE 20 00 F3 0F 11 04 88 0F 28 C2").count(1);
-			auto lastincrement = trampoline->Pointer<float>();
-			*lastincrement = -1.0;
-			pointers[0] = reinterpret_cast<uintptr_t>(lastincrement);
-			if (!ParametricASMJump("movss dword ptr [rip + ?0], xmm0; movss dword ptr [rax + rcx * 4], xmm0;", &space, &size, constants, pointers, param_floats))
-			{
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0xD)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
-			}
-			match = pattern("28 C8 F3 0F 11 4D 18 45 84 C0 0F 84 C9 00 00 00").count(1);
-			param_floats[0] = framerate / 30.0f;
-			param_floats[1] = 5.0f;
-			pointers[0] = reinterpret_cast<uintptr_t>(lastincrement);
-			if (!ParametricASMJump("movss dword ptr [rbp + 0x18], xmm1; cmp dword ptr [rdi], 4; jz B; cmp r11d, 0x6d; jne B; comiss xmm1, dword ptr [rip + ?0]; jne B; comiss xmm3, %1; jbe B; mulss xmm3, %0; cvtss2si eax, xmm3; cvtsi2ss xmm3, eax; B: movss dword ptr [rbp + 0x30], xmm3;", &space, &size, constants, pointers, param_floats)) //If the switch will go to case 109 (cmp r11d, 0x6d), and the value in xmm1 has been retrieved via baseaddress + 0x372150() (it didn't follow the branch of cmp dword ptr [rdi], 4), then check if it's the last incremented value. If that's the case then it means that gets compared to xmm3 for triggering frame counter based events, so adjust (and truncate) xmm3 accordingly. Check for <= 5.0 to avoid softlocks.
-			{
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0x7)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
-			}
-
-			//Unknown (likely Gameplay fixes #2 due to proximity) [ref: 0x0013D86C]
-			match = pattern("00 00 00 F3 0F 10 04 88 F3 0F 5C 05 78 DD 20 00").count(1);
-			param_floats[0] = 30.0f / framerate;
-			if (!ParametricASMJump("subss xmm0, %0", &space, &size, constants, pointers, param_floats))
-			{
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
 			}
 
 			//Fix controller camera speed (orbital) for controller
@@ -648,16 +611,20 @@ void OnInitializeHook()
 			auto propagatecounters = trampoline->Pointer<uint8_t>();
 			auto reset_list = trampoline->Pointer<uint8_t>(); //Used as an interleaved cycle, to avoid desync
 			*reset_list = 1;
-			uint8_t sub_14025FD20_rbx_list_count = 10;
-			auto sub_14025FD20_rbx_list = reinterpret_cast<uint64_t*>(trampoline->RawSpace(sub_14025FD20_rbx_list_count * sizeof(uint64_t)));
-			constants[0] = sub_14025FD20_rbx_list_count;
+			uint8_t damage_and_audio_triggers_count = 20;
+			auto damage_and_audio_triggers = reinterpret_cast<uint64_t*>(trampoline->RawSpace(damage_and_audio_triggers_count * sizeof(uint64_t)));
+			uint8_t floatcountersptrs_count = 20;
+			auto floatcountersptrs = reinterpret_cast<uint64_t*>(trampoline->RawSpace(floatcountersptrs_count * sizeof(uint64_t)));
+			constants[0] = damage_and_audio_triggers_count;
+			constants[1] = floatcountersptrs_count;
 			param_floats[0] = 30.0f / framerate;
 			param_floats[1] = 1.0f;
 			pointers[0] = reinterpret_cast<uintptr_t>(interleavedincrement);
 			pointers[1] = reinterpret_cast<uintptr_t>(propagatecounters);
 			pointers[2] = reinterpret_cast<uintptr_t>(reset_list);
-			pointers[3] = reinterpret_cast<uintptr_t>(sub_14025FD20_rbx_list);
-			if (!ParametricASMJump("movss xmm2, dword ptr [rip + ?0]; addss xmm2, %0; comiss xmm2, %1; mov byte ptr [rip + ?1], 0; jb A; subss xmm2, %1; mov byte ptr [rip + ?1], 1; neg byte ptr [rip + ?2]; js A; lea rax, [rip + ?3]; xor rbx, rbx; B: mov qword ptr [rax + rbx * 8], 0; inc rbx; cmp bl, $0; jl B; A: movss dword ptr [rip + ?0], xmm2; mov rbx, qword ptr [rsp + 0x40]", &space, &size, constants, pointers, param_floats)) //Use a slightly convoluted way to decide if this rendered frame will update counters (done immediately after renderer sleep)
+			pointers[3] = reinterpret_cast<uintptr_t>(damage_and_audio_triggers);
+			pointers[4] = reinterpret_cast<uintptr_t>(floatcountersptrs);
+			if (!ParametricASMJump("movss xmm2, dword ptr [rip + ?0]; addss xmm2, %0; comiss xmm2, %1; mov byte ptr [rip + ?1], 0; jb A; subss xmm2, %1; mov byte ptr [rip + ?1], 1; lea rax, [rip + ?4]; xor rbx, rbx; C: mov qword ptr [rax + rbx * 8], 0; inc rbx; cmp bl, $1; jl C; neg byte ptr [rip + ?2]; js A; lea rax, [rip + ?3]; xor rbx, rbx; B: mov qword ptr [rax + rbx * 8], 0; inc rbx; cmp bl, $0; jl B; A: movss dword ptr [rip + ?0], xmm2; mov rbx, qword ptr [rsp + 0x40]", &space, &size, constants, pointers, param_floats)) //Use a slightly convoluted way to decide if this rendered frame will update counters (done immediately after renderer sleep)
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xC)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
@@ -665,12 +632,69 @@ void OnInitializeHook()
 
 			//$ Fire projectile damage trigger to rts elements only once
 			match = pattern("40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 18 FE FF FF 48 81 EC").count(1);
-			pointers[0] = reinterpret_cast<uintptr_t>(sub_14025FD20_rbx_list);
+			pointers[0] = reinterpret_cast<uintptr_t>(damage_and_audio_triggers);
 			pointers[1] = reinterpret_cast<uintptr_t>(reset_list);
 			if (!ParametricASMJump("lea rax, [rip + ?0]; xor r10, r10; B: cmp qword ptr [rax + r10 * 8], 0; je A; cmp rbx, qword ptr [rax + r10 * 8]; je C; inc r10; jmp B; C: mov eax, 1; ret; A: mov byte ptr [rip + ?1], 1; mov qword ptr [rax + r10 * 8], rbx; push rbp; push rbx; push rsi; push rdi;", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x5)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
+			}
+
+			//Remove audio trigger duplicates (ideally there should be a proper fix, like for the triggers above, for now it just mutes them)
+			match = pattern("41 FF 46 10 49 89 76 08 49 8D 4D 18 48 8B 01 FF").count(1);
+			constants[0] = damage_and_audio_triggers_count;
+			pointers[0] = reinterpret_cast<uintptr_t>(damage_and_audio_triggers);
+			pointers[1] = reinterpret_cast<uintptr_t>(reset_list);
+			pointers[2] = reinterpret_cast<uintptr_t>(match.get_first<void>(0x2E));
+			if (!ParametricASMJump("inc dword ptr [r14+10h]; mov [r14+8], rsi; cmp rax, 0x20; je F; push r8; push r10; lea r8, [rip + ?0]; xor r10, r10; A: cmp qword ptr [r8 + r10 * 8], r11; je D; inc r10; cmp r10b, $0; jl A; xor r10, r10; B: cmp qword ptr [r8 + r10 * 8], 0; jne C; mov qword ptr [r8 + r10 * 8], r11; jmp E; C: inc r10; jmp B; E:pop r10; pop r8; mov byte ptr [rip + ?1], 1; jmp F; D: xorps xmm0, xmm0; pop r10; pop r8; lea rax, [rip + ?2]; jmp rax; F:nop", &space, &size, constants, pointers, param_floats))
+			{
+				//DebugBreak();
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
+			}
+
+			//Gameplay fixes #1 (i.e guards falling into the ground below when dropping from the ship at the beginning of the game)[ref:0x0013D75C, different approach used]
+			match = pattern("8B 43 08 F3 0F 10 04 88 F3 0F 58 05 3C DE 20 00").count(1);
+			constants[0] = floatcountersptrs_count;
+			constants[1] = baseaddress + 0x574CA0; //Whenever it's supposed to be a proper frame counter instead of a random increase, this value is @rsp + 0x60
+			pointers[0] = reinterpret_cast<uintptr_t>(floatcountersptrs);
+			param_floats[0] = 1.0f;
+			param_floats[1] = 10.0f;
+			if (!ParametricASMJump("mov r13, $1; cmp qword ptr [rsp + 0x60], r13; je F; movss xmm1, dword ptr [rsp + 0x10]; comiss xmm1, %1; jae E; comiss xmm1, %0; jb E; F:lea rbx, [rax + rcx * 4]; lea r13, [rip + ?0]; xor r15, r15; A: cmp qword ptr [r13 + r15 * 8], rbx; je D; inc r15; cmp r15b, $0; jl A; addss xmm0, %0; xor r15, r15; B: cmp qword ptr [r13 + r15 * 8], 0; jne C; mov qword ptr [r13 + r15 * 8], rbx; jmp D; C: inc r15; jmp B; E: addss xmm0, %0; D: nop", &space, &size, constants, pointers, param_floats))
+			{
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
+			}
+
+			//Unknown (likely Gameplay fixes #2 due to proximity) [ref: 0x0013D86C]
+			match = pattern("00 00 00 F3 0F 10 04 88 F3 0F 5C 05 78 DD 20 00").count(1);
+			constants[0] = floatcountersptrs_count;
+			pointers[0] = reinterpret_cast<uintptr_t>(floatcountersptrs);
+			param_floats[0] = 1.0f;
+			if (!ParametricASMJump("lea rbx, [rax + rcx * 4]; lea r13, [rip + ?0]; xor r15, r15; A: cmp qword ptr [r13 + r15 * 8], rbx; je D; inc r15; cmp r15b, $0; jl A; subss xmm0, %0; xor r15, r15; B: cmp qword ptr [r13 + r15 * 8], 0; jne C; mov qword ptr [r13 + r15 * 8], rbx; jmp D; C: inc r15; jmp B; D: nop", &space, &size, constants, pointers, param_floats))
+			{
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
+			}
+
+			//Various timings, used mainly in cutscenes but not exclusively [ref: 0x00127D90]
+			match = pattern("2F C8 76 04 C6 41 2C 01 F3 0F 5C 0D 93 34 22 00").count(1);
+			constants[0] = floatcountersptrs_count;
+			pointers[0] = reinterpret_cast<uintptr_t>(floatcountersptrs);
+			param_floats[0] = 1.0f;
+			if (!ParametricASMJump("push rax; push rdx; push r14; lea rax, [rcx + 0x38]; lea rdx, [rip + ?0]; xor r14, r14; A: cmp qword ptr [rdx + r14 * 8], rax; je D; inc r14; cmp r14b, $0; jl A; subss xmm1, %0; xor r14, r14; B: cmp qword ptr [rdx + r14 * 8], 0; jne C; mov qword ptr [rdx + r14 * 8], rax; jmp D; C: inc r14; jmp B; D: pop r14; pop rdx; pop rax;", &space, &size, constants, pointers, param_floats))
+			{
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x10)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x8), space, PATCH_JUMP);
+			}
+
+			//Bonus/Malus duration
+			match = pattern("74 34 0F B7 06 66 41 03 C5 66 89 06 66 83 F8 5A").count(1);
+			pointers[0] = reinterpret_cast<uintptr_t>(propagatecounters);
+			if (!ParametricASMJump("movzx eax, word ptr [rsi]; cmp byte ptr [rip + ?0], 1; jne A; add ax, r13w; A: nop;", &space, &size, constants, pointers, param_floats))
+			{
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
 			}
 
 			//RTS missions bases regen speed
@@ -785,19 +809,20 @@ void OnInitializeHook()
 				}
 			});
 
-			//HP regen speed
-			match = pattern("07 03 F0 EB 02 03 F3 8B C6 99 83 E2 7F 03 C2 C1").count(1);
+			//HP regen (and poison effect) speed
+			match = pattern("99 83 E2 7F 03 C2 C1 F8 07 03 F0 EB 02 03 F3 8B").count(1);
 			constants[0] = 128 * (framerate / 30.0f);
-			if (!ParametricASMJump("mov r8d, $0; xor edx, edx; mov eax, esi; div r8d;", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("mov r8d, $0; cdq; idiv r8d;", &space, &size, constants, pointers, param_floats))
 			{
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0x12)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
 			}
-			match = pattern("B9 0F 27 00 00 F7 D9 41 8B D0 C1 E1 07 03 F1 8B").count(1);
-			if (!ParametricASMJump("mov esi, edx; mov edx, r8d;", &space, &size, constants, pointers, param_floats))
+			match = pattern("C6 99 83 E2 7F 03 C2 C1 F8 07 85 C0 74 7F 44 8B").count(1);
+			constants[0] = 128 * (framerate / 30.0f);
+			if (!ParametricASMJump("mov r8d, $0; cdq; idiv r8d;", &space, &size, constants, pointers, param_floats))
 			{
-				WriteOffsetValue(space + size - 4, match.get_first<void>(0xF)); //Fill the final jump with the correct address
-				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xA)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
 			}
 
 			/*Specific characters moveset fixes*/
@@ -822,23 +847,39 @@ void OnInitializeHook()
 			//Nine's jump (and high jump) travel distance (take into account accumulating floating point errors when adjusting the values)
 			match = pattern("87 FC 00 00 00 F3 0F 58 53 08 F3 0F 58 4B 04 F3 0F 58 03 F3 0F 11 03 F3").count(1);
 			param_floats[0] = 20.0f / (framerate - 10.0f);
-			if (!ParametricASMJump("movss xmm10, %0; mulss xmm2, xmm10; mulss xmm1, xmm10; mulss xmm0, xmm10; addss xmm2, dword ptr [rbx + 8]; addss xmm1, dword ptr [rbx + 4]; addss xmm0, dword ptr [rbx]", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("mulss xmm2, %0; mulss xmm1, %0; mulss xmm0, %0; addss xmm2, dword ptr [rbx + 8]; addss xmm1, dword ptr [rbx + 4]; addss xmm0, dword ptr [rbx]", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x13)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 			match = pattern("10 03 F3 0F 58 87 FC 00 00 00 F3 0F 58 53 08 F3").count(1);
 			param_floats[0] = 20.0f / (framerate - 10.0f);
-			if (!ParametricASMJump("movss xmm0, dword ptr [rdi + 0xFC]; movss xmm10, %0; mulss xmm2, xmm10; mulss xmm1, xmm10; mulss xmm0, xmm10; addss xmm2, dword ptr [rbx + 8]; addss xmm1, dword ptr [rbx + 4]; addss xmm0, dword ptr [rbx]", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("movss xmm0, dword ptr [rdi + 0xFC]; mulss xmm2, %0; mulss xmm1, %0; mulss xmm0, %0; addss xmm2, dword ptr [rbx + 8]; addss xmm1, dword ptr [rbx + 4]; addss xmm0, dword ptr [rbx]", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x14)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
 			}
 
+			//Trey's raining arrows
+			match = pattern("0F 10 83 FC 00 00 00 F3 0F 58 93 94 00 00 00 F3").count(1);
+			param_floats[0] = 30.0f / framerate;
+			if (!ParametricASMJump("mulss xmm2, %0; mulss xmm1, %0; mulss xmm0, %0; addss xmm2, dword ptr [rbx+ 0x94]", &space, &size, constants, pointers, param_floats))
+			{
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0xF)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
+			}
+			match = pattern("F3 0F 58 93 94 00 00 00 F3 0F 58 8B 90 00 00 00").count(1);
+			param_floats[0] = 30.0f / framerate;
+			if (!ParametricASMJump("mulss xmm2, %0; mulss xmm1, %0; mulss xmm0, %0; addss xmm2, dword ptr [rbx+ 0x94]", &space, &size, constants, pointers, param_floats))
+			{
+				WriteOffsetValue(space + size - 4, match.get_first<void>(0x8)); //Fill the final jump with the correct address
+				InjectHook(match.get_first<void>(), space, PATCH_JUMP);
+			}
+
 			//Rocket Launcher guy projectile speed (instead of being set every time the function is called, it's only done once, so it needs to be reset for the next cycle)
 			match = pattern("00 00 48 8B 8D 10 01 00 00 48 33 CC E8 4F 50 E8").count(1);
 			param_floats[0] = framerate / 30.0f;
-			if (!ParametricASMJump("mov rcx, qword ptr [rbp + 0x110]; movss xmm2, %0; movss xmm3, dword ptr [rdi + 0x54]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x54], xmm3; movss xmm3, dword ptr [rdi + 0x58]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x58], xmm3; movss xmm3, dword ptr [rdi + 0x5C]; mulss xmm3, xmm2; movss dword ptr [rdi + 0x5C], xmm3;", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("mov rcx, qword ptr [rbp + 0x110]; movss xmm3, dword ptr [rdi + 0x54]; mulss xmm3, %0; movss dword ptr [rdi + 0x54], xmm3; movss xmm3, dword ptr [rdi + 0x58]; mulss xmm3, %0; movss dword ptr [rdi + 0x58], xmm3; movss xmm3, dword ptr [rdi + 0x5C]; mulss xmm3, %0; movss dword ptr [rdi + 0x5C], xmm3;", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x9)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x2), space, PATCH_JUMP);
@@ -892,7 +933,7 @@ void OnInitializeHook()
 			//Deuce flute energy sphere when following targets (speed and amplitude)
 			match = pattern("C8 80 E1 01 F3 44 0F 11 43 54 F3 44 0F 11 53 58").count(1);
 			param_floats[0] = 30.0f / framerate;
-			if (!ParametricASMJump("mulss xmm9, xmm7; mulss xmm9, xmm1; movss xmm4, %0; mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx + 0x54], xmm8; movss dword ptr [rbx + 0x58], xmm10; movss dword ptr [rbx + 0x5C], xmm9", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("mulss xmm9, xmm7; mulss xmm9, xmm1; mulss xmm8, %0; mulss xmm9, %0; mulss xmm10, %0; movss dword ptr [rbx + 0x54], xmm8; movss dword ptr [rbx + 0x58], xmm10; movss dword ptr [rbx + 0x5C], xmm9", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x20)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x4), space, PATCH_JUMP);
@@ -907,7 +948,7 @@ void OnInitializeHook()
 			//Deuce flute energy sphere when going back to Deuce
 			match = pattern("0F B6 0D C0 ED 39 00 F3 44 0F 11 43 54 F3 44 0F").count(1);
 			param_floats[0] = 30.0f / framerate;
-			if (!ParametricASMJump("lea rdx, [rbx + 0x44]; mov eax, 0x20; and cl, 1; movss xmm4, %0; mulss xmm8, xmm4; mulss xmm9, xmm4; mulss xmm10, xmm4; movss dword ptr [rbx + 0x54], xmm8; movss dword ptr [rbx + 0x58], xmm10; movss dword ptr [rbx + 0x5C], xmm9", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("lea rdx, [rbx + 0x44]; mov eax, 0x20; and cl, 1; mulss xmm8, %0; mulss xmm9, %0; mulss xmm10, %0; movss dword ptr [rbx + 0x54], xmm8; movss dword ptr [rbx + 0x58], xmm10; movss dword ptr [rbx + 0x5C], xmm9", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x25)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x7), space, PATCH_JUMP);
@@ -939,13 +980,13 @@ void OnInitializeHook()
 			Patch<float>(maxallowedincrement.get(1).get<void>(0x8), (30.0f / framerate) * 30.0f);
 			match = pattern("00 0F 2F 05 ? ? 2E 00 F3 0F 11 87 00 01 00 00").count(2);
 			param_floats[0] = (30.0f / framerate) * 30.0f;
-			if (!ParametricASMJump("movss xmm6, %0; comiss xmm0, xmm6", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("comiss xmm0, %0", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get(0).get<void>(0x8)); //Fill the final jump with the correct address
 				InjectHook(match.get(0).get<void>(0x1), space, PATCH_JUMP);
 			}
 			param_floats[0] = (30.0f / framerate) * 30.0f;
-			if (!ParametricASMJump("movss xmm6, %0; comiss xmm0, xmm6", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("comiss xmm0, %0", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get(1).get<void>(0x8)); //Fill the final jump with the correct address
 				InjectHook(match.get(1).get<void>(0x1), space, PATCH_JUMP);
@@ -953,14 +994,14 @@ void OnInitializeHook()
 			//Enemy grenade range
 			match = pattern("87 00 01 00 00 F3 41 0F 10 56 08 F3 41 0F 10 4E").count(1); //case 3
 			param_floats[0] = 30.0f / framerate;
-			if (!ParametricASMJump("movss xmm2, dword ptr [r14 + 0x8]; movss xmm1, dword ptr [r14 + 0x4]; movss xmm0, dword ptr [r14]; movss xmm4, %0; mulss xmm2, xmm4; mulss xmm0, xmm4; addss xmm2, dword ptr [rdx + 0x8]; addss xmm1, dword ptr [rdx + 0x4]; addss xmm0, dword ptr [rdx]", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("movss xmm2, dword ptr [r14 + 0x8]; movss xmm1, dword ptr [r14 + 0x4]; movss xmm0, dword ptr [r14]; mulss xmm2, %0; mulss xmm0, %0; addss xmm2, dword ptr [rdx + 0x8]; addss xmm1, dword ptr [rdx + 0x4]; addss xmm0, dword ptr [rdx]", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x24)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x5), space, PATCH_JUMP);
 			}
 			match = pattern("00 F3 41 0F 10 54 24 08 F3 41 0F 10 4C 24 04 49").count(1); //case 4
 			param_floats[0] = 30.0f / framerate;
-			if (!ParametricASMJump("movss xmm2, dword ptr [r12 + 0x8]; movss xmm1, dword ptr [r12 + 0x4]; movss xmm0, dword ptr [r12]; movss xmm4, %0; mulss xmm2, xmm4; mulss xmm0, xmm4; addss xmm2, dword ptr [r15 + 0x8]; addss xmm1, dword ptr [r15 + 0x4]; addss xmm0, dword ptr [r15]; mov rdx, r15", &space, &size, constants, pointers, param_floats))
+			if (!ParametricASMJump("movss xmm2, dword ptr [r12 + 0x8]; movss xmm1, dword ptr [r12 + 0x4]; movss xmm0, dword ptr [r12]; mulss xmm2, %0; mulss xmm0, %0; addss xmm2, dword ptr [r15 + 0x8]; addss xmm1, dword ptr [r15 + 0x4]; addss xmm0, dword ptr [r15]; mov rdx, r15", &space, &size, constants, pointers, param_floats))
 			{
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0x29)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x1), space, PATCH_JUMP);
@@ -988,7 +1029,6 @@ void OnInitializeHook()
 				WriteOffsetValue(space + size - 4, match.get_first<void>(0xB)); //Fill the final jump with the correct address
 				InjectHook(match.get_first<void>(0x3), space, PATCH_JUMP);
 			}
-
 		}
 
 		const float fovoverride = GetPrivateProfileIntW(L"FOV", L"FOVPercentage", 0, wcModulePath) / 100.0f;
