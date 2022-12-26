@@ -36,6 +36,8 @@ This is just a bonus feature that I discovered when working with ultrawide resol
 
 **There is no upper bound limit to this value, however, going past 200 really starts to mess up with the geometry culling functions when moving the camera, so it isn't recommended.**
 
+Note: According to some visual estimates done by the reddit user [Hoshiko-Yoshida](https://www.reddit.com/r/FinalFantasy/comments/w0gb3n/comment/j1mio3v/?utm_source=share&utm_medium=web2x&context=3) which I can't confirm or deny given my ignorance on the matter, the game base FOV seems to be 53/54° hor for the Near camera. Adjust your percentage taking this in mind if you care about having a given value.
+
 ## Installation
 
 Download the latest release.zip from github and extract it in your FINAL FANTASY TYPE-0 HD\WIN folder. If you'd like to use the nightly release, download its zip and overwrite FFT0HD Unlocker.asi.
