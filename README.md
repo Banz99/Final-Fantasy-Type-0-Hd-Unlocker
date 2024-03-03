@@ -42,6 +42,16 @@ Note: According to some visual estimates done by the reddit user [Hoshiko-Yoshid
 
 Download the latest release.zip from github and extract it in your FINAL FANTASY TYPE-0 HD\WIN folder. If you'd like to use the nightly release, download its zip and overwrite FFT0HD Unlocker.asi.
 
+## Building the project
+
+Clone the repository with the git clone --recurse-submodules option.
+
+Download the latest release of [premake](https://premake.github.io/download/), extract the executable in the cloned repo (alongside the .lua file), open a command prompt and type 
+```
+premake5.exe vs20xx
+```
+where xx is either 19 or 22 depending on your Visual Studio installation. You'll get a "build" folder and opening the solution file will allow you to compile the .asi file.
+
 ## Credits
 * [CookiePLMonster](https://github.com/CookiePLMonster)
 * [LunaMoo](https://github.com/LunaMoo)
