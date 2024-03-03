@@ -24,7 +24,7 @@ workspace "*"
 	-- Disable exceptions in WIL
 	defines { "WIL_SUPPRESS_EXCEPTIONS" }
 
-	cppdialect "C++17"
+	cppdialect "C++20"
 	staticruntime "on"
 	buildoptions { "/sdl" }
 	warnings "Extra"
